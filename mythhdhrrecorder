@@ -1,0 +1,798 @@
+#!/usr/bin/env python3
+
+#
+# Copyright (c) 2016, 2017 Gary Buhrmaster <gary.buhrmaster@gmail.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+import sys
+import threading
+import time
+import requests
+import json
+import re
+import queue
+import argparse
+import socket
+import inspect
+import os
+import io
+import datetime
+
+
+# Logging is "complicated" because (a) we are running
+# in python3, so as of now the existing MythTV logging
+# class is not available, and (b), the existing MythTV
+# logging class has not been updated for more recent
+# logging changes (i.e. it does not support the dblog
+# channges, nor systemd-journal logging), and (c) one
+# cannot log to stdout in any case (stdout has been
+# stolen by the transport stream for the External
+# Recoder).  So, while we will try to import the
+# (hoped for) eventual new version of the logging class,
+# we will provide an adequate 'stub' for now (probably
+# 90% borrowed from the existing MythTV.logging class).
+
+try:
+    import MythTV.logging
+except ImportError:
+
+    import syslog
+    import systemd.journal
+
+    class LOGMASK(object):
+        ALL         = 0b111111111111111111111111111
+        MOST        = 0b011111111110111111111111111
+        NONE        = 0b000000000000000000000000000
+
+        GENERAL     = 0b000000000000000000000000001
+        RECORD      = 0b000000000000000000000000010
+        PLAYBACK    = 0b000000000000000000000000100
+        CHANNEL     = 0b000000000000000000000001000
+        OSD         = 0b000000000000000000000010000
+        FILE        = 0b000000000000000000000100000
+        SCHEDULE    = 0b000000000000000000001000000
+        NETWORK     = 0b000000000000000000010000000
+        COMMFLAG    = 0b000000000000000000100000000
+        AUDIO       = 0b000000000000000001000000000
+        LIBAV       = 0b000000000000000010000000000
+        JOBQUEUE    = 0b000000000000000100000000000
+        SIPARSER    = 0b000000000000001000000000000
+        EIT         = 0b000000000000010000000000000
+        VBI         = 0b000000000000100000000000000
+        DATABASE    = 0b000000000001000000000000000
+        DSMCC       = 0b000000000010000000000000000
+        MHEG        = 0b000000000100000000000000000
+        UPNP        = 0b000000001000000000000000000
+        SOCKET      = 0b000000010000000000000000000
+        XMLTV       = 0b000000100000000000000000000
+        DVBCAM      = 0b000001000000000000000000000
+        MEDIA       = 0b000010000000000000000000000
+        IDLE        = 0b000100000000000000000000000
+        CHANNELSCAN = 0b001000000000000000000000000
+        SYSTEM      = 0b010000000000000000000000000
+        TIMESTAMP   = 0b100000000000000000000000000
+
+    class LOGLEVEL(object):
+        ANY         = -1
+        EMERG       = 0
+        ALERT       = 1
+        CRIT        = 2
+        ERR         = 3
+        WARNING     = 4
+        NOTICE      = 5
+        INFO        = 6
+        DEBUG       = 7
+        UNKNOWN     = 8
+
+    class LOGFACILITY(object):
+        KERN        = 1
+        USER        = 2
+        MAIL        = 3
+        DAEMON      = 4
+        AUTH        = 5
+        LPR         = 6
+        NEWS        = 7
+        UUCP        = 8
+        CRON        = 9
+        LOCAL0      = 10
+        LOCAL1      = 11
+        LOCAL2      = 12
+        LOCAL3      = 13
+        LOCAL4      = 14
+        LOCAL5      = 15
+        LOCAL6      = 16
+        LOCAL7      = 17
+
+    class MythLog(LOGLEVEL, LOGMASK, LOGFACILITY):
+
+        def __init__(self, module='pythonbindings', db=None):
+            self._module = module
+            self._db = db
+            self._parseinput = self._noop
+
+        def _noop(self):
+            pass
+
+        def _initlogger(self):
+            self._initlogger = self._noop
+            self._MASK = LOGMASK.GENERAL
+            self._LEVEL = LOGLEVEL.DEBUG
+            self._LOGSTREAM = None
+            self._logwrite = self._logdummy
+            self._QUIET = 1
+            self._DBLOG = False
+            self._SYSLOG = None
+            self._lock = threading.Lock()
+            self._parseinput()
+
+        def _logdummy(self, mask, level, message, detail=None):
+            return
+
+        def _logstream(self, mask, level, message, detail=None):
+            self._LOGSTREAM.write('{0} {3} [{1}] {2} ' \
+                    .format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
+                      os.getpid(), self._module,
+                      ['!','A','C','E','W','N','I','D'][level]) + 
+                      message + (' -- {0}'.format(detail) if detail else '') + '\n')
+            self._LOGSTREAM.flush()
+            return
+
+        def _logsyslog(self, mask, level, message, detail=None):
+            syslog.syslog(message + (' -- {0}'.format(detail) if detail else ''))
+            return
+
+        def _logjournal(self, mask, level, message, detail=None):
+            systemd.journal.sendv('MESSAGE=' + message + (' -- {0}'.format(detail) if detail else ''),
+                                  'PRIORITY=' + str(level),
+                                  'SYSLOG_PID=' + str(os.getpid()),
+                                  'SYSLOG_IDENTIFIER=' + self._module)
+            return
+
+        def log(self, mask, level, message, detail=None):
+            self._initlogger()
+            if level > self._LEVEL:
+                return
+            if not mask&self._MASK:
+                return
+            if self._QUIET > 1:
+                return
+
+            with self._lock:
+                self._logwrite(mask, level, message, detail)
+            #
+            # In this stub we do not support logging to the database
+            # (database logging is deprecated, and probably a bad
+            # idea on most real world implementations anyway)
+            #
+            #if self._DBLOG:
+            #    self._logdatabase(mask, level, message, detail)
+
+        def _argparseinput(self):
+            opts = self._parser.parse_args()
+            if opts.quiet:
+                self._QUIET = opts.quiet
+            if opts.enable_dblog:
+                self._DBLOG = opts.enable_dblog
+            if opts.loglevel:
+                self._LEVEL = getattr(self, opts.loglevel)
+                if self._LEVEL is None:
+                    self._LEVEL = LOGLEVEL.INFO
+            if opts.verbose:
+                vlist = ('IMPORTANT', 'GENERAL', 'RECORD', 'PLAYBACK', 'CHANNEL',
+                    'OSD', 'FILE', 'SCHEDULE', 'NETWORK', 'COMMFLAG', 'AUDIO',
+                    'LIBAV', 'JOBQUEUE', 'SIPARSER', 'EIT', 'VBI', 'DATABASE',
+                    'DSMCC', 'MHEG','UPNP','SOCKET','XMLTV','DVBCAM','MEDIA',
+                    'IDLE', 'CHANNELSCAN', 'EXTRA', 'TIMESTAMP')
+                for v in opts.verbose.upper().split(','):
+                    if v in ('ALL', 'MOST', 'NONE'):
+                        self._MASK = getattr(self, v)
+                    elif v in vlist:
+                        self._MASK |= getattr(self, v)
+                    elif (len(v) > 2) and (v[0:2] == 'NO'):
+                        if v[2:] in vlist:
+                            self._MASK &= self._MASK^getattr(self, v[2:])
+            if opts.logpath:
+                if self._SYSLOG is not None:
+                    self._SYSLOG.closelog()
+                    self._SYSLOG = None
+                if self._LOGSTREAM is not None:
+                    self._LOGSTREAM.close()
+                    self._LOGSTREAM = None
+                fn = os.path.join(opts.logpath, '{0}.{1}.{2}.log'.format(self._module,
+                                    datetime.datetime.now().strftime('%Y%m%d%H%M%S'),
+                                    os.getpid()))
+                self._LOGSTREAM = io.open(fn, 'w')
+                self._logwrite = self._logstream
+            if opts.syslog:
+                if self._LOGSTREAM is not None:
+                    self._LOGSTREAM.close()
+                    self._LOGSTREAM = None
+                self._logwrite = self._logsyslog
+                self._SYSLOG = opts.syslog
+                syslog.openlog(self._module, logoption=syslog.LOG_PID|syslog.LOG_NDELAY, facility=getattr(syslog, 'LOG_' + opts.syslog))
+            if opts.journal:
+                if self._SYSLOG is not None:
+                    self._SYSLOG.closelog()
+                    self._SYSLOG = None
+                if self._LOGSTREAM is not None:
+                    self._LOGSTREAM.close()
+                    self._LOGSTREAM = None
+                self._logwrite = self._logjournal
+
+        def loadArgParse(self, parser):
+            self._parser = parser
+            self._parseinput = self._argparseinput
+            parser.add_argument('--quiet', '-q', action='count', default=0, dest='quiet',
+                        help='Run quiet.')
+            parser.add_argument('--verbose', '-v', type=str.lower, dest='verbose', default='general',
+                        help='Specify log verbosity')
+            parser.add_argument('--enable-dblog', action='store_true', dest='enable_dblog', default=False,
+                        help='Specify logging to the database.')
+            parser.add_argument('--loglevel', action='store', type=str.upper, dest='loglevel', default='info',
+                        choices=['ANY', 'EMERG', 'ALERT', 'CRIT', 'ERR', 'WARNING', 'NOTICE', 'INFO', 'DEBUG', 'UNKNOWN'],
+                        help='Specify log verbosity, using standard syslog levels.')
+            parser.add_argument('--logpath', action='store', type=str, dest='logpath',
+                        help='Specify directory to log to, filename will be automatically decided.')
+            parser.add_argument('--syslog', action='store', type=str.upper, dest='syslog',
+                        choices=['AUTH', 'AUTHPRIV', 'CRON', 'DAEMON', 'KERN', 'LPR', 'MAIL', 'NEWS',
+                                 'SYSLOG', 'USER', 'UUCP', 'LOCAL0', 'LOCAL1', 'LOCAL2', 'LOCAL3',
+                                 'LOCAL4', 'LOCAL5', 'LOCAL6', 'LOCAL7'],
+                        help='Specify syslog facility to log to.')
+            parser.add_argument('--systemd-journal', action='store_true', dest='journal', default=False,
+                        help='Specify systemd-journald logging.')
+
+        def __call__(self, mask, level, message, detail=None):
+            self.log(mask, level, message, detail)
+        
+
+def HDHRdiscover():
+
+    #
+    # Try a few different ways to identify eligible HDHRs
+    #
+    #
+    # First, obtain list from my.hdhomerun.com (SD provided service)
+    #
+    # Second, try to get a list of IP addresses that appear to
+    # be tuners (via a hand constructed packet (we just collect
+    # the IP addresses, and then perform a discovery)
+    #
+
+    discoveredTuners = {}
+
+    try:
+        r = requests.get('https://my.hdhomerun.com/discover', timeout=(.5, .2))
+        r.raise_for_status()
+        SDdiscover = r.json()
+    except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
+        SDdiscover = {}
+
+    for device in SDdiscover:
+        Legacy = False
+        DeviceID = None
+        DiscoverURL = None
+        LocalIP = None
+        if 'Legacy' in device:
+            Legacy = bool(device['Legacy'])
+        if 'DeviceID' in device:
+            DeviceID = device['DeviceID']
+        if 'DiscoverURL' in device:
+            DiscoverURL = device['DiscoverURL']
+        if 'LocalIP' in device:
+            LocalIP = device['LocalIP']
+
+        if (Legacy) or (DeviceID is None) or (DiscoverURL is None) or (LocalIP is None):
+            continue
+
+        log(MythLog.RECORD, MythLog.DEBUG, 'discovered hdhomerun device from silicondust cloud: {0}'.format(LocalIP))
+
+        discoveredTuners[LocalIP] = DiscoverURL
+
+    discovery_udp_port = 65001
+    # Hand constructed discovery message (device type = tuner, device id = wildcard)
+    discovery_udp_msg = bytearray.fromhex('00 02 00 0c 01 04 00 00 00 01 02 04 ff ff ff ff 4e 50 7f 35')
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(.2)
+    for i in range(2):
+        sock.sendto(discovery_udp_msg, ('<broadcast>', discovery_udp_port))
+        while(1):
+            try:
+                (buf, addr) = sock.recvfrom(2048)
+            except socket.timeout:
+                break
+            if addr is None:
+                continue
+            if buf is None:
+                continue
+
+            log(MythLog.RECORD, MythLog.DEBUG, 'discovered hdhomerun device by local broadcast response: {0}'.format(addr[0]))
+
+            DiscoverURL = 'http://' + addr[0] + ':80/discover.json'
+            discoveredTuners[addr[0]] = DiscoverURL
+
+    eligibleTuners = []
+
+    for device in discoveredTuners:
+        try:
+            r = requests.get(discoveredTuners[device], timeout=(.2, .2))
+            r.raise_for_status()
+            discoverResponse = r.json()
+        except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
+            discoverResponse = {}
+
+        Legacy = False
+        DeviceID = None
+        LineupURL = None
+        if 'Legacy' in discoverResponse:
+            Legacy = bool(discoverResponse['Legacy'])
+        if 'DeviceID' in discoverResponse:
+            DeviceID = discoverResponse['DeviceID']
+        if 'LineupURL' in discoverResponse:
+            LineupURL = discoverResponse['LineupURL']
+
+        if (Legacy) or (DeviceID is None) or (LineupURL is None):
+            continue
+
+        discoverResponse['LocalIP'] = device
+        eligibleTuners.append(discoverResponse)
+
+    return(eligibleTuners)
+
+
+def channelNormalize(channel):
+
+    m0 = re.match('^(\d+)$', channel)
+    m1 = re.match('^(\d+)\.(\d+)$', channel)
+    m2 = re.match('^(\d+)_(\d+)$', channel)
+    m3 = re.match('^(\d+)-(\d+)$', channel)
+    if m0:
+        return '{0}'.format(int(m0.group(1)))
+    elif m1:
+        return '{0}.{1}'.format(int(m1.group(1)), int(m1.group(2)))
+    elif m2:
+        return '{0}.{1}'.format(int(m1.group(1)), int(m1.group(2)))
+    elif m3:
+        return '{0}.{1}'.format(int(m1.group(1)), int(m1.group(2)))
+    raise TypeError('Invalid channel: {0}'.format(channel))
+
+
+def CommandResponse(response):
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'command reply: {0}'.format(response))
+    sys.stderr.write(response + '\n')
+    sys.stderr.flush()
+    return
+
+
+class TransportStreamWriterThread(object):
+
+    def __init__(self, FIFO=None, flowcontrol='XON/XOFF', blocksize=6160384, interval=.2, MythLog=None):
+        self._FIFO = FIFO
+        if flowcontrol == 'XON/XOFF':
+            self._flowcontrol = flowcontrol
+            self._streaming = True
+        elif flowcontrol == 'Polling':
+            self._flowcontrol = flowcontrol
+            self._streaming = False
+        else:
+            raise ValueError('flowcontrol must be XON/OFF or Polling')
+        self._interval = interval
+        self._work = threading.Event()
+        self._running = True
+        self._blocksize = blocksize
+        self._logger = MythLog
+        thread = threading.Thread(target=self.run, args=())
+        thread.daemon = True
+        thread.start()
+
+    def _log(self, mask, level, message, detail=None):
+        if self._logger is not None:
+            self._logger(mask, level, message, detail)
+
+    def close(self):
+        self._running = False
+        self._streaming = False
+        self._work.set()
+
+    def pause(self):
+        self._streaming = False
+        self._work.set()
+
+    def resume(self):
+        self._streaming = True
+        self._work.set()
+
+    def flowcontrol(self, flowcontrol=None):
+        if flowcontrol is not None:
+            if flowcontrol == 'XON/XOFF':
+                self._flowcontrol = flowcontrol
+                self._streaming = True
+            elif flowcontrol == 'Polling':
+                self._flowcontrol = flowcontrol
+                self._streaming = False
+            else:
+                raise ValueError('flowcontrol must be XON/OFF or Polling')
+            self._work.set()
+        return self._flowcontrol
+
+    def blocksize(self, blocksize=None):
+        if blocksize is not None:
+            self._blocksize = blocksize
+        return self._blocksize
+
+    def sendbytes(self):
+        self._streaming = True
+        self._work.set()
+        return True
+
+    def run(self):
+        while self._running:
+            self._work.wait(self._interval)
+            self._work.clear()
+            while (self._streaming):
+                try:
+                    bytes = self._FIFO.get(block=False)
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue block retrieved, size={0}'.format(len(bytes)))
+                    sys.stdout.buffer.write(bytes)
+                    sys.stdout.flush()
+                except queue.Empty:
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue empty')
+                    break
+                if self._flowcontrol == 'Polling':
+                    self._streaming = False
+
+
+class TransportStreamReaderThread(object):
+
+    def __init__(self, FIFO=None, interval=.2, MythLog=None):
+        self._FIFO = FIFO
+        self._interval = interval
+        self._channels = dict()
+        self._stream = None
+        self._streaming_stop = 0
+        self._streaming_stop_delay = .50
+        self._lock = threading.Lock()
+        self._state = None
+        self._channel = None
+        self._work = threading.Event()
+        self._chunksize = 1316 * 40
+        self._lta = 1
+        self._running = True
+        self._logger = MythLog
+        thread = threading.Thread(target=self.run, args=())
+        thread.daemon = True
+        thread.start()
+
+    def _log(self, mask, level, message, detail=None):
+        if self._logger is not None:
+            self._logger(mask, level, message, detail)
+
+    def addHDHR(self, lineupURL):
+        try:
+            r = requests.get(lineupURL, timeout=(.2, .2))
+            r.raise_for_status()
+            hdhrLineup = r.json()
+        except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
+            hdhrLineup = {}
+
+        for hdhrChannel in hdhrLineup:
+            if 'GuideNumber' not in hdhrChannel:
+                continue
+            if 'URL' not in hdhrChannel:
+                continue
+            try:
+                guidenumber = channelNormalize(hdhrChannel['GuideNumber'])
+            except TypeError:
+                continue
+            favorite = False
+            if 'Favorite' in hdhrChannel:
+                favorite = hdhrChannel['Favorite']
+            if guidenumber not in self._channels:
+                self._channels[guidenumber] = list()
+            if favorite:
+                self._channels[guidenumber].insert(0, hdhrChannel['URL'])
+            else:
+                self._channels[guidenumber].append(hdhrChannel['URL'])
+
+    def start(self):
+        with self._lock:
+            self._streaming_stop = None
+        self._work.set()
+
+    def stop(self):
+        with self._lock:
+            self._streaming_stop = time.time() + self._streaming_stop_delay
+        self._work.set()
+
+    def close(self):
+        with self._lock:
+            if self._stream:
+                try:
+                    self._stream.connection.close()
+                except (requests.exceptions.RequestException, AttributeError):
+                    pass
+            self._stream = None
+            self._state = None
+        self._running = False
+        self._work.set()
+
+    def tune(self, channel):
+        c = channelNormalize(channel)
+        if c not in self._channels:
+            raise ValueError('Channel {0} not available'.format(c))
+        with self._lock:
+            if self._stream:
+                try:
+                    self._stream.connection.close()
+                except (requests.exceptions.RequestException, AttributeError):
+                    pass
+            self._stream = None
+            self._channel = c
+            self._state = 'Tuning'
+            self._chunksize = 1316 * 40
+            self._lta = 1
+        self._work.set()
+
+    def hasLock(self):
+        return self._state == 'Streaming'
+
+    def isTuning(self):
+        return self._state == 'Tuning';
+
+    def isStreaming(self):
+        return self._state == 'Streaming';
+
+    def run(self):
+        while self._running:
+            self._work.wait(self._interval)
+            self._work.clear()
+            if self._state == 'Tuning':
+                # for each device with channel
+                # try sequentially
+                for url in self._channels[self._channel]:
+                    try:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'trying tuning with url: {0}'.format(url))
+                        self._stream = requests.get(url, stream=True, timeout=(4, 30))
+                        self._stream.raise_for_status()
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning succeeded')
+                        with self._lock:
+                            self._state = 'Streaming'
+                        break
+                    except requests.exceptions.RequestException:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning failed')
+                        continue
+                if self._state != 'Streaming':
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning failed on all eligible devices')
+                    with self._lock:
+                        self._state = None
+            elif self._state == 'Streaming':
+                while self._running:
+                    start = time.time()
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'trying to read stream block')
+                    try:
+                        chunk = self._stream.raw.read(self._chunksize)
+                    except (requests.exceptions.RequestException, AttributeError):
+                        break
+                    if not chunk:
+                        break
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream block read, size={0}'.format(len(chunk)))
+                    # Try a bit of adaptive chunk sizing (targeting between .5 and 1 secs)
+                    chunksize = self._chunksize
+                    interval = time.time() - start
+                    self._lta = ((self._lta * 3) + interval) / 4
+                    if self._lta < 0.25:
+                        self._chunksize = min(6160384, (1316 * ((self._chunksize * 2) // 1316)))
+                    elif self._lta > 1.5:
+                        self._chunksize = max(1316, (1316 * ((self._chunksize // 2) // 1316)))
+                    elif self._lta < 0.5:
+                        self._chunksize = min(6160384, (1316 * (int(self._chunksize * 1.10) // 1316)))
+                    elif self._lta > 1.0:
+                        self._chunksize = max(1316, (1316 * (int(self._chunksize * 0.9) // 1316)))
+                    else:
+                        pass
+                    if chunksize != self._chunksize:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'stream read block size changed from {0} to {1}'.format(chunksize, self._chunksize))
+
+                    # If not streaming, throw the bytes away
+                    if self._streaming_stop is not None and self._streaming_stop < start:
+                        break
+
+                    try:
+                        self._FIFO.put(chunk, block=False)
+                    except queue.Full:
+                        # Try to make room by removing oldest.
+                        lost = bytes()
+                        try:
+                            lost = self._FIFO.get(block=False)
+                        except queue.Empty:
+                            pass
+                        self._log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'stream FIFO queue full, dropped chunk of {0} bytes'.format(len(lost)))
+                        try:
+                            self._FIFO.put(chunk, block=False)
+                        except queue.Full:
+                            pass
+            else:
+                pass
+
+
+if __name__ == '__main__':
+
+    # Instantiate logging 
+    log = MythLog(os.path.basename(sys.argv[0]))
+
+    # Parse our args
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--hdhr', action='append', type=str, dest='hdhr',
+                        help='the HDHomeRun(s) from which to stream')
+    parser.add_argument('--queuesize', action='store', type=int, default=100, dest='queuesize',
+                        help='Specify the internal fifo stream size')
+    parser.add_argument('--devicename', '--devname', '-d', action='store', type=str, dest='devicename', default='',
+                        help='unique devicename for ExternalRecorder')
+
+    log.loadArgParse(parser)
+
+    args = parser.parse_args()
+
+    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder starting, args: {0}'.format(' '.join(sys.argv[1:])))
+
+    # Discover HDHRs
+    discoveredHDHRs = HDHRdiscover()
+
+    # Create our FIFO transport stream buffer
+    TransportStreamFIFO = queue.Queue(maxsize=args.queuesize)
+
+    # Start our writer and reader threads
+    TSWriter = TransportStreamWriterThread(TransportStreamFIFO, MythLog=log)
+    TSReader = TransportStreamReaderThread(TransportStreamFIFO, MythLog=log)
+
+    # If no hdhr provided, use all we know about
+    # otherwise, try to find if the specified device
+    # is something we know about, and use the
+    # discovered lineupurl if possible (or just
+    # create the likely lineupurl).
+
+    if args.hdhr is None:
+        # Add all discovered HDHRs
+        for hdhr in discoveredHDHRs:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR: {0}'.format(hdhr['LocalIP']))
+            TSReader.addHDHR(hdhr['LineupURL'])
+        pass
+    else:
+        for hdhr in args.hdhr:
+            if re.match('^[0-9A-Z]{8}$', hdhr.upper()):    # deviceid?
+                for d in discoveredHDHRs:
+                    if d['DeviceID'] == hdhr.upper():
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR specified by deviceid ({0}): {1}'.format(hdhr.upper(), d['LocalIP']))
+                        TSReader.addHDHR(d['LineupURL'])
+                        break
+            else:                                          # possible IP or dns
+                try:
+                    ip = socket.getaddrinfo(hdhr, None)[0][4][0]
+                    found = False
+                    for d in discoveredHDHRs:
+                        if d['LocalIP'] == ip:
+                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR specified by ip ({0}): {1}'.format(hdhr, d['LocalIP']))
+                            TSReader.addHDHR(d['LineupURL'])
+                            found = True
+                            break
+                    if found is False:
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding undiscovered HDHR explicitly by user request ({0}): {1}'.format(hdhr, ip))
+                        TSReader.addHDHR('http://' + ip + ':80/lineup.json')
+                except socket.error:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Unable to resolve specified HDHR: {0}'.format(hdhr))
+                    pass
+
+    # Main loop (reading commands)
+
+    while True:
+
+        try:
+            cmd = sys.stdin.readline()
+        except KeyboardInterrupt:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Keyboard Interrupt, closing recorder')
+            break
+        except IOError as e:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'IOError reading stdin ({}: {}), closing recorder'.format(e.errno, e.strerr))
+            break
+        except:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Error reading stdin, aborting: ' + sys.exc_info()[0])
+            break
+        if not cmd:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'EOF reading stdin, closing recorder')
+            break
+        cmd = cmd.rstrip('\n')
+
+        log(MythLog.RECORD, MythLog.DEBUG, 'command received: {0}'.format(cmd))
+
+        if (cmd == 'Version?'):
+            CommandResponse('OK:1.0')
+        elif (cmd == 'HasTuner?'):
+            CommandResponse('OK:Yes')
+        elif (cmd == 'HasPictureAttributes?'):
+            CommandResponse('OK:No')
+        elif (cmd == 'FlowControl?'):
+            CommandResponse('OK:{0}'.format(TSWriter.flowcontrol()))
+        elif (cmd.startswith('TuneChannel:')):
+            channel = cmd[12:]
+            try:
+                TSReader.tune(channel)
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning request for channel {0} accepted'.format(channel))
+                CommandResponse('OK')
+            except ValueError:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request for channel {0} failed (invalid or unavailable channel)'.format(channel))
+                CommandResponse('ERR: Channel {0} is invalid'.format(channel))
+        elif (cmd == 'LockTimeout?'):
+            CommandResponse('OK:10000')
+        elif (cmd == 'SignalStrengthPercent?'):
+            if TSReader.hasLock():
+                CommandResponse('OK:100')
+            else:
+                CommandResponse('OK:0')
+        elif (cmd == 'IsOpen?'):
+            CommandResponse('OK:Open')
+        elif (cmd == 'HasLock?'):
+            if TSReader.hasLock():
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning successful')
+                CommandResponse('OK:Yes')
+            else:
+                if TSReader.isTuning():
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning in progress')
+                else:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
+                CommandResponse('OK:No')
+        elif (cmd == 'StartStreaming'):
+            TSReader.start()
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Streaming started')
+            CommandResponse('OK:Started')
+        elif (cmd == 'StopStreaming'):
+            TSReader.stop()
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Streaming stopped')
+            CommandResponse('OK:Stopped')
+        elif (cmd == 'XON'):
+            TSWriter.resume()
+            CommandResponse('OK')
+        elif (cmd == 'XOFF'):
+            TSWriter.pause()
+            CommandResponse('OK')
+        elif (cmd.startswith('BlockSize:')):
+            blksize = cmd[10:]
+            try:
+                blocksize = int(blksize)
+                TSWriter.blocksize(blocksize)
+                CommandResponse('OK')
+            except ValueError:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize {0} is invalid'.format(blksize))
+                CommandResponse('ERR:BlockSize {0} is invalid'.format(blksize))
+        elif (cmd == 'SendBytes'):
+            TSWriter.sendbytes()
+            CommandResponse('OK')
+        elif (cmd == 'CloseRecorder'):
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder stopping')
+            CommandResponse('OK:Terminating')
+            break
+        else:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid command received from ExternalRecorder: {0}'.format(cmd))
+            CommandResponse('ERR:Unknown command {0}'.format(cmd))
+
+    TSWriter.close()
+    TSReader.close()
+    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder stopped')
+
+
+
+
+
+# vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
