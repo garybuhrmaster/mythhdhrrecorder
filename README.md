@@ -32,7 +32,7 @@ mythhdhrrecorder will respect channels being
 disabled on a device (that device will not be
 used for those disabled channels).
 
-###Limitations:
+### Limitations:
 
   * This recorder depends on the External Recorder
     functionality added in 0.28.
@@ -86,7 +86,7 @@ used for those disabled channels).
     one (or more) fewer MythTV External Recorder
     instances than available tuners.
 
-####mythhdhrrecorder options
+#### mythhdhrrecorder options
   * --hdhr {ipaddress|deviceid}
     <br>
     Specify the hdhr(s) to use (the default is to
@@ -102,7 +102,7 @@ used for those disabled channels).
     <br>
     Specify the unique devicename (external recorder requirement)
 
-####Setup in MythTV
+#### Setup in MythTV
 
   * In mythtv-setup, select "Capture cards"
   * Select "New capture card"
