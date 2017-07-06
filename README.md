@@ -39,10 +39,11 @@ used for those disabled channels).
 
   * This recorder depends on the functionality
     added to MythTV with ticket #12919. As of
-    this writing, that patch has not been backported
-    to 0.28, so individuals will either need to be
-    running a later version, or compile their own
-    version of MythTV.
+    this writing, that patch is in fixes/0.28, but
+    may not have been integrated by your packager.
+    Individuals may either need to be running master,
+    compile their own version of MythTV, or request
+    their packager to update their package.
 
   * The HDHR sharing API requires exclusive use of
     a tuner for each program.  There is no ability
