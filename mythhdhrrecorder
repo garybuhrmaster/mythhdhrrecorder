@@ -750,7 +750,7 @@ if __name__ == '__main__':
                 CommandResponse('OK')
             except ValueError:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request for channel {0} failed (invalid or unavailable channel)'.format(channel))
-                CommandResponse('ERR: Channel {0} is invalid'.format(channel))
+                CommandResponse('ERR:Channel {0} is invalid'.format(channel))
         elif (cmd == 'LockTimeout?'):
             CommandResponse('OK:10000')
         elif (cmd == 'SignalStrengthPercent?'):
