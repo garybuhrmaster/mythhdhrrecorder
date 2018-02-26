@@ -36,7 +36,7 @@ import datetime
 # class is not available, and (b), the existing MythTV
 # logging class has not been updated for more recent
 # logging changes (i.e. it does not support the dblog
-# channges, nor systemd-journal logging), and (c) one
+# changes, nor systemd-journal logging), and (c) one
 # cannot log to stdout in any case (stdout has been
 # stolen by the transport stream for the External
 # Recoder).  So, while we will try to import the
