@@ -754,6 +754,14 @@ if __name__ == '__main__':
             CommandResponse('OK:Yes')
         elif (cmd == 'HasPictureAttributes?'):
             CommandResponse('OK:No')
+        elif (cmd.startswith('SetBrightness:')):
+            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+        elif (cmd.startswith('SetContrast:')):
+            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+        elif (cmd.startswith('SetColour:')):
+            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+        elif (cmd.startswith('SetHue:')):
+            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
         elif (cmd == 'FlowControl?'):
             CommandResponse('OK:{0}'.format(TSWriter.flowcontrol()))
         elif (cmd.startswith('TuneChannel:')):
