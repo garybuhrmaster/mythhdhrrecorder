@@ -556,8 +556,6 @@ class TransportStreamReaderThread(object):
             self._stream = None
             self._channel = c
             self._state = 'Tuning'
-            self._chunksize = 1316 * 40
-            self._lta = 1
         self._work.set()
 
     def hasLock(self):
@@ -601,6 +599,8 @@ class TransportStreamReaderThread(object):
                             self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning succeeded (socket information unavailable)')
                         with self._lock:
                             self._state = 'Streaming'
+                            self._chunksize = 1316 * 40
+                            self._lta = 1
                         break
                     except requests.exceptions.RequestException:
                         self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning failed')
