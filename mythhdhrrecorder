@@ -548,14 +548,17 @@ class TransportStreamReaderThread(object):
         if c not in self._channels:
             raise ValueError('Channel {0} not available'.format(c))
         with self._lock:
-            if self._stream:
-                try:
-                    self._stream.connection.close()
-                except (requests.exceptions.RequestException, AttributeError):
-                    pass
-            self._stream = None
-            self._channel = c
-            self._state = 'Tuning'
+            if (self._channel == c) and (self._state == 'Streaming') and (self._stream is not None):
+                self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning request to same channel {0} while streaming ignored'.format(c))
+            else:
+                if self._stream:
+                    try:
+                        self._stream.connection.close()
+                    except (requests.exceptions.RequestException, AttributeError):
+                        pass
+                self._stream = None
+                self._channel = c
+                self._state = 'Tuning'
         self._work.set()
 
     def hasLock(self):
