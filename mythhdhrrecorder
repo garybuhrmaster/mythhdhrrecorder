@@ -388,11 +388,19 @@ class TransportStreamWriterThread(object):
             self._flowcontrol = flowcontrol
             self._streaming = False
         else:
-            raise ValueError('flowcontrol must be XON/OFF or Polling')
-        self._interval = interval
+            raise ValueError('flowcontrol {0} must be XON/OFF or Polling'.format(flowcontrol))
+        try:
+            self._interval = float(interval)
+        except ValueError:
+            raise ValueError('interval {0} is not a valid float'.format(interval))
+        try:
+            self._blocksize = int(blocksize)
+        except:
+            raise ValueError('blocksize {0} is not a valid integer'.format(blocksize))
+        if self._blocksize < 1:
+            raise ValueError('blocksize {0} must be greater than zero'.format(blocksize))
         self._work = threading.Event()
         self._running = True
-        self._blocksize = blocksize
         self._logger = MythLog
         thread = threading.Thread(target=self.run, args=())
         thread.daemon = True
@@ -424,13 +432,19 @@ class TransportStreamWriterThread(object):
                 self._flowcontrol = flowcontrol
                 self._streaming = False
             else:
-                raise ValueError('flowcontrol must be XON/OFF or Polling')
+                raise ValueError('FlowControl {0} must be XON/OFF or Polling'.format(flowcontrol))
             self._work.set()
         return self._flowcontrol
 
     def blocksize(self, blocksize=None):
         if blocksize is not None:
-            self._blocksize = blocksize
+            try:
+                size = int(blocksize)
+            except ValueError:
+                raise ValueError('BlockSize {0} is not a valid integer'.format(blocksize))
+            if size < 1:
+                raise ValueError('BlockSize {0} must be greater than zero'.format(blocksize))
+            self._blocksize = size
         return self._blocksize
 
     def sendbytes(self):
@@ -746,11 +760,12 @@ if __name__ == '__main__':
             channel = cmd[12:]
             try:
                 TSReader.tune(channel)
+            except (ValueError, TypeError) as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning request for channel {0} accepted'.format(channel))
                 CommandResponse('OK')
-            except ValueError:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request for channel {0} failed (invalid or unavailable channel)'.format(channel))
-                CommandResponse('ERR:Channel {0} is invalid'.format(channel))
         elif (cmd == 'LockTimeout?'):
             CommandResponse('OK:10000')
         elif (cmd == 'SignalStrengthPercent?'):
@@ -792,14 +807,14 @@ if __name__ == '__main__':
             TSWriter.pause()
             CommandResponse('OK')
         elif (cmd.startswith('BlockSize:')):
-            blksize = cmd[10:]
+            blocksize = cmd[10:]
             try:
-                blocksize = int(blksize)
                 TSWriter.blocksize(blocksize)
+            except ValueError as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
                 CommandResponse('OK')
-            except ValueError:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize {0} is invalid'.format(blksize))
-                CommandResponse('ERR:BlockSize {0} is invalid'.format(blksize))
         elif (cmd == 'SendBytes'):
             TSWriter.sendbytes()
             CommandResponse('OK')
