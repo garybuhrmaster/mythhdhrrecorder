@@ -416,10 +416,14 @@ class TransportStreamWriterThread(object):
         self._work.set()
 
     def pause(self):
+        if self._flowcontrol != 'XON/XOFF':
+            raise TypeError('Recorder is not in XON/XOFF flow control mode')
         self._streaming = False
         self._work.set()
 
     def resume(self):
+        if self._flowcontrol != 'XON/XOFF':
+            raise TypeError('Recorder is not in XON/XOFF flow control mode')
         self._streaming = True
         self._work.set()
 
@@ -448,6 +452,8 @@ class TransportStreamWriterThread(object):
         return self._blocksize
 
     def sendbytes(self):
+        if self._flowcontrol != 'Polling':
+            raise TypeError('Recorder is not in Polling flow control mode')
         self._streaming = True
         self._work.set()
         return True
@@ -812,11 +818,21 @@ if __name__ == '__main__':
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Streaming stopped')
             CommandResponse('OK:Stopped')
         elif (cmd == 'XON'):
-            TSWriter.resume()
-            CommandResponse('OK')
+            try:
+                TSWriter.resume()
+            except TypeError as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XON request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd == 'XOFF'):
-            TSWriter.pause()
-            CommandResponse('OK')
+            try:
+                TSWriter.pause()
+            except TypeError as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XOFF request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd.startswith('BlockSize:')):
             blocksize = cmd[10:]
             try:
@@ -827,8 +843,13 @@ if __name__ == '__main__':
             else:
                 CommandResponse('OK')
         elif (cmd == 'SendBytes'):
-            TSWriter.sendbytes()
-            CommandResponse('OK')
+            try:
+                TSWriter.sendbytes()
+            except TypeError as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SendBytes request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd == 'CloseRecorder'):
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder stopping')
             CommandResponse('OK:Terminating')
