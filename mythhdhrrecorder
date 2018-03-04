@@ -400,6 +400,7 @@ class TransportStreamWriterThread(object):
         if self._blocksize < 1:
             raise ValueError('blocksize {0} must be greater than zero'.format(blocksize))
         self._work = threading.Event()
+        self._lock = threading.Lock()
         self._running = True
         self._logger = MythLog
         thread = threading.Thread(target=self.run, args=())
