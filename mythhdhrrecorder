@@ -546,6 +546,7 @@ class TransportStreamReaderThread(object):
                 except (requests.exceptions.RequestException, AttributeError):
                     pass
             self._stream = None
+            self._channel = None
             self._state = None
         self._running = False
         self._work.set()
@@ -618,6 +619,13 @@ class TransportStreamReaderThread(object):
                 if self._state != 'Streaming':
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning failed on all eligible devices')
                     with self._lock:
+                        if self._stream:
+                            try:
+                                self._stream.connection.close()
+                            except (requests.exceptions.RequestException, AttributeError):
+                                pass
+                        self._stream = None
+                        self._channel = None
                         self._state = None
             elif self._state == 'Streaming':
                 while self._running:
