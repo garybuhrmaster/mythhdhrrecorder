@@ -668,11 +668,12 @@ class TransportStreamReaderThread(object):
                             lost = self._FIFO.get(block=False)
                         except queue.Empty:
                             pass
-                        self._log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'stream FIFO queue full, dropped chunk of {0} bytes'.format(len(lost)))
-                        try:
-                            self._FIFO.put(chunk, block=False)
-                        except queue.Full:
-                            pass
+                        else:
+                            self._log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'stream FIFO queue full, dropped chunk of {0} bytes'.format(len(lost)))
+                            try:
+                                self._FIFO.put(chunk, block=False)
+                            except queue.Full:
+                                self._log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'stream FIFO queue still full, unable to append chunk of {0} bytes'.format(len(chunk)))
             else:
                 pass
 
