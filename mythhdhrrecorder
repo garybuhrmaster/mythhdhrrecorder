@@ -541,7 +541,10 @@ class TransportStreamReaderThread(object):
         self._running = False
         self._work.set()
 
-    def tune(self, channel):
+    def hasTuner(self):
+        return True
+
+    def tuneChannel(self, channel):
         c = channelNormalize(channel)
         if c not in self._channels:
             raise ValueError('Channel {0} not available'.format(c))
@@ -558,6 +561,21 @@ class TransportStreamReaderThread(object):
                 self._channel = c
                 self._state = 'Tuning'
         self._work.set()
+
+    def hasPictureAttributes(self):
+        return False
+
+    def setBrightness(self, brightness):
+        raise TypeError('Recorder does not support PictureAttributes')
+
+    def setContrast(self, contrast):
+        raise TypeError('Recorder does not support PictureAttributes')
+
+    def setColour(self, colour):
+        raise TypeError('Recorder does not support PictureAttributes')
+
+    def setHue(self, hue):
+        raise TypeError('Recorder does not support PictureAttributes')
 
     def hasLock(self):
         return self._state == 'Streaming'
@@ -759,24 +777,58 @@ if __name__ == '__main__':
 
         if (cmd == 'Version?'):
             CommandResponse('OK:1.0')
-        elif (cmd == 'HasTuner?'):
-            CommandResponse('OK:Yes')
         elif (cmd == 'HasPictureAttributes?'):
-            CommandResponse('OK:No')
+            if TSReader.hasPictureAttributes():
+                CommandResponse('OK:Yes')
+            else:
+                CommandResponse('OK:No')
         elif (cmd.startswith('SetBrightness:')):
-            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+            value = cmd[14:]
+            try:
+                TSReader.setBrightness(value)
+            except (ValueError, TypeError) as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetBrightness request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd.startswith('SetContrast:')):
-            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+            value = cmd[12:]
+            try:
+                TSReader.setContrast(value)
+            except (ValueError, TypeError) as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetContrast request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd.startswith('SetColour:')):
-            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+            value = cmd[10:]
+            try:
+                TSReader.setColour(value)
+            except (ValueError, TypeError) as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetColour request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd.startswith('SetHue:')):
-            CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
+            value = cmd[7:]
+            try:
+                TSReader.setHue(value)
+            except (ValueError, TypeError) as e:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetHue request failed:' + str(e))
+                CommandResponse('ERR:' + str(e))
+            else:
+                CommandResponse('OK')
         elif (cmd == 'FlowControl?'):
             CommandResponse('OK:{0}'.format(TSWriter.flowControl()))
+        elif (cmd == 'HasTuner?'):
+            if TSReader.hasTuner():
+                CommandResponse('OK:Yes')
+            else:
+                CommandResponse('OK:No')
         elif (cmd.startswith('TuneChannel:')):
             channel = cmd[12:]
             try:
-                TSReader.tune(channel)
+                TSReader.tuneChannel(channel)
             except (ValueError, TypeError) as e:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request failed:' + str(e))
                 CommandResponse('ERR:' + str(e))
