@@ -428,7 +428,7 @@ class TransportStreamWriterThread(object):
         self._streaming = True
         self._work.set()
 
-    def flowcontrol(self, flowcontrol=None):
+    def flowControl(self, flowcontrol=None):
         if flowcontrol is not None:
             if flowcontrol == 'XON/XOFF':
                 self._flowcontrol = flowcontrol
@@ -441,7 +441,7 @@ class TransportStreamWriterThread(object):
             self._work.set()
         return self._flowcontrol
 
-    def blocksize(self, blocksize=None):
+    def blockSize(self, blocksize=None):
         if blocksize is not None:
             try:
                 size = int(blocksize)
@@ -452,7 +452,7 @@ class TransportStreamWriterThread(object):
             self._blocksize = size
         return self._blocksize
 
-    def sendbytes(self):
+    def sendBytes(self):
         if self._flowcontrol != 'Polling':
             raise TypeError('Recorder is not in Polling flow control mode')
         self._streaming = True
@@ -782,7 +782,7 @@ if __name__ == '__main__':
         elif (cmd.startswith('SetHue:')):
             CommandResponse('ERR:Unsupported command {0} (recorder does not support PictureAttributes)'.format(cmd))
         elif (cmd == 'FlowControl?'):
-            CommandResponse('OK:{0}'.format(TSWriter.flowcontrol()))
+            CommandResponse('OK:{0}'.format(TSWriter.flowControl()))
         elif (cmd.startswith('TuneChannel:')):
             channel = cmd[12:]
             try:
@@ -846,7 +846,7 @@ if __name__ == '__main__':
         elif (cmd.startswith('BlockSize:')):
             blocksize = cmd[10:]
             try:
-                TSWriter.blocksize(blocksize)
+                TSWriter.blockSize(blocksize)
             except ValueError as e:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize request failed:' + str(e))
                 CommandResponse('ERR:' + str(e))
@@ -854,7 +854,7 @@ if __name__ == '__main__':
                 CommandResponse('OK')
         elif (cmd == 'SendBytes'):
             try:
-                TSWriter.sendbytes()
+                TSWriter.sendBytes()
             except TypeError as e:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SendBytes request failed:' + str(e))
                 CommandResponse('ERR:' + str(e))
