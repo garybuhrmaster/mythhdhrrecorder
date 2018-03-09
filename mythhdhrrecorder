@@ -456,12 +456,13 @@ class TransportStreamWriterThread(object):
             while (self._streaming):
                 try:
                     bytes = self._FIFO.get(block=False)
-                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue block retrieved, size={0}'.format(len(bytes)))
-                    sys.stdout.buffer.write(bytes)
-                    sys.stdout.flush()
                 except queue.Empty:
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue empty')
                     break
+                else:
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue block retrieved, size={0}'.format(len(bytes)))
+                    sys.stdout.buffer.write(bytes)
+                    sys.stdout.flush()
                 if self._flowcontrol == 'Polling':
                     self._streaming = False
 
@@ -548,9 +549,10 @@ class TransportStreamReaderThread(object):
         c = channelNormalize(channel)
         if c not in self._channels:
             raise ValueError('Channel {0} not available'.format(c))
+        samechannel = False
         with self._lock:
             if (self._channel == c) and (self._state == 'Streaming') and (self._stream is not None):
-                self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning request to same channel {0} while streaming ignored'.format(c))
+                samechannel = True
             else:
                 if self._stream:
                     try:
@@ -560,6 +562,8 @@ class TransportStreamReaderThread(object):
                 self._stream = None
                 self._channel = c
                 self._state = 'Tuning'
+        if samechannel:
+            self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning request to same channel {0} while streaming ignored'.format(c))
         self._work.set()
 
     def hasPictureAttributes(self):
