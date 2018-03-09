@@ -428,17 +428,7 @@ class TransportStreamWriterThread(object):
         self._streaming = True
         self._work.set()
 
-    def flowControl(self, flowcontrol=None):
-        if flowcontrol is not None:
-            if flowcontrol == 'XON/XOFF':
-                self._flowcontrol = flowcontrol
-                self._streaming = True
-            elif flowcontrol == 'Polling':
-                self._flowcontrol = flowcontrol
-                self._streaming = False
-            else:
-                raise ValueError('FlowControl {0} must be XON/OFF or Polling'.format(flowcontrol))
-            self._work.set()
+    def flowControl(self):
         return self._flowcontrol
 
     def blockSize(self, blocksize=None):
