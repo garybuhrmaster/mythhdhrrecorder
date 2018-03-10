@@ -379,7 +379,7 @@ def CommandResponse(response):
 
 class TransportStreamWriterThread(object):
 
-    def __init__(self, FIFO=None, flowcontrol='XON/XOFF', blocksize=6160384, interval=.2, MythLog=None):
+    def __init__(self, FIFO=None, flowcontrol='XON/XOFF', blocksize=6160384, interval=.1, MythLog=None):
         self._FIFO = FIFO
         if flowcontrol == 'XON/XOFF':
             self._flowcontrol = flowcontrol
@@ -650,16 +650,19 @@ class TransportStreamReaderThread(object):
                     if not chunk:
                         break
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'stream block read, size={0}'.format(len(chunk)))
-                    # Try a bit of adaptive chunk sizing (targeting between .5 and 1 secs)
+                    # Try a bit of adaptive chunk sizing (targeting between .5 and 1 secs),
+                    # limited to the "magic" 769860 (which is a multiple of 1316 which is
+                    # good for the HDHR, but less than MythTV's "TOO_FAST_SIZE" value which
+                    # forces start/stop mode)
                     chunksize = self._chunksize
                     interval = time.time() - start
                     self._lta = ((self._lta * 3) + interval) / 4
                     if self._lta < 0.25:
-                        self._chunksize = min(6160384, (1316 * ((self._chunksize * 2) // 1316)))
+                        self._chunksize = min(769860, (1316 * ((self._chunksize * 2) // 1316)))
                     elif self._lta > 1.5:
                         self._chunksize = max(1316, (1316 * ((self._chunksize // 2) // 1316)))
                     elif self._lta < 0.5:
-                        self._chunksize = min(6160384, (1316 * (int(self._chunksize * 1.10) // 1316)))
+                        self._chunksize = min(769860, (1316 * (int(self._chunksize * 1.10) // 1316)))
                     elif self._lta > 1.0:
                         self._chunksize = max(1316, (1316 * (int(self._chunksize * 0.9) // 1316)))
                     else:
