@@ -450,21 +450,38 @@ class TransportStreamWriterThread(object):
         return True
 
     def run(self):
+        bytes = bytearray()
         while self._running:
             self._work.wait(self._interval)
             self._work.clear()
             while (self._streaming):
-                try:
-                    bytes = self._FIFO.get(block=False)
-                except queue.Empty:
-                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue empty')
-                    break
-                else:
-                    self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue block retrieved, size={0}'.format(len(bytes)))
-                    sys.stdout.buffer.write(bytes)
-                    sys.stdout.flush()
                 if self._flowcontrol == 'Polling':
                     self._streaming = False
+                while (len(bytes) < self._blocksize):
+                    try:
+                        chunk = self._FIFO.get(block=False)
+                    except queue.Empty:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue empty')
+                        break
+                    else:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'stream FIFO queue block retrieved, size={0}'.format(len(chunk)))
+                        bytes.extend(chunk)
+                if len(bytes) == 0:
+                    break
+                sendlen = min(self._blocksize, len(bytes))
+                sentlen = sys.stdout.buffer.write(bytes[0:sendlen])
+                sys.stdout.flush()
+                if sentlen < 0:
+                    self._log(MythLog.RECORD, MythLog.ERR, 'error {} while writing to stdout'.format(sentlen))
+                    break
+                else:
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'wrote {} bytes to stdout, {} accepted'.format(sendlen, sentlen))
+                    if sentlen == 0:
+                        break
+                    elif sentlen == len(bytes):
+                        bytes.clear()
+                    else:
+                        bytes = bytes[sentlen:]
 
 
 class TransportStreamReaderThread(object):
