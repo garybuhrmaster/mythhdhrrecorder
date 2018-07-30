@@ -279,6 +279,9 @@ def HDHRdiscover():
     except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
         SDdiscover = {}
 
+    if SDdiscover is None:
+        SDdiscover = {}
+
     for device in SDdiscover:
         Legacy = False
         DeviceID = None
