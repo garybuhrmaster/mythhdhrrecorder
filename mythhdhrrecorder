@@ -313,7 +313,7 @@ def HDHRdiscover():
     sock.settimeout(.2)
     for i in range(2):
         sock.sendto(discovery_udp_msg, ('<broadcast>', discovery_udp_port))
-        while(1):
+        while True:
             try:
                 (buf, addr) = sock.recvfrom(2048)
             except socket.timeout:
@@ -357,7 +357,7 @@ def HDHRdiscover():
         discoverResponse['LocalIP'] = device
         eligibleTuners.append(discoverResponse)
 
-    return(eligibleTuners)
+    return eligibleTuners
 
 
 def channelNormalize(channel):
