@@ -518,12 +518,15 @@ class TransportStreamReaderThread(object):
             self._logger(mask, level, message, detail)
 
     def addHDHR(self, lineupURL):
+        hdhrLineup = []
         try:
             r = requests.get(lineupURL, timeout=(.2, .2))
             r.raise_for_status()
             hdhrLineup = r.json()
+            if not isinstance(hdhrLineup, list):
+                hdhrLineup = []
         except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
-            hdhrLineup = {}
+            hdhrLineup = []
 
         for hdhrChannel in hdhrLineup:
             if 'GuideNumber' not in hdhrChannel:
