@@ -865,7 +865,7 @@ if __name__ == '__main__':
                     APIVERSION = value
                     CommandResponse(serial, 'OK:' + str(APIVERSION))
         elif (cmd == 'Version?'):
-            CommandResponse(serial, 'OK:'+ str(VERSION))
+            CommandResponse(serial, 'OK:' + str(VERSION))
         elif (cmd == 'HasPictureAttributes?'):
             if TSReader.hasPictureAttributes():
                 CommandResponse(serial, 'OK:Yes')
