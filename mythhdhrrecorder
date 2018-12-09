@@ -603,6 +603,11 @@ class TransportStreamReaderThread(object):
             self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning request to same channel {0} while streaming ignored'.format(c))
         self._work.set()
 
+    def getChannel(self):
+        if (self._stream is None) or (self._state is not 'Streaming'):
+            return None
+        return self._channel
+
     def hasPictureAttributes(self):
         return False
 
@@ -866,6 +871,17 @@ if __name__ == '__main__':
                     CommandResponse(serial, 'OK:' + str(APIVERSION))
         elif (cmd == 'Version?'):
             CommandResponse(serial, 'OK:' + str(VERSION))
+        elif (cmd == 'Description?'):
+            description = os.path.basename(sys.argv[0])
+            description += ' (pid #{})'.format(os.getpid())
+            if TSReader.hasLock():
+                channel = TSReader.getChannel()
+                if channel is not None:
+                    description += ' streaming channel {}'.format(channel)
+                connectionAddresses = TSReader.getConnectionAddresses()
+                if connectionAddresses is not None:
+                    description += ' from {}'.format(connectionAddresses[2])
+            CommandResponse(serial, 'OK:' + description)
         elif (cmd == 'HasPictureAttributes?'):
             if TSReader.hasPictureAttributes():
                 CommandResponse(serial, 'OK:Yes')
