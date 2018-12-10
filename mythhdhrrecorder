@@ -595,12 +595,12 @@ class TransportStreamReaderThread(object):
                     try:
                         chunk = self._FIFO.get(block=False)
                     except queue.Empty:
-                        self._log(MythLog.RECORD, MythLog.DEBUG, 'TuneChannel stream FIFO queue empting complete')
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying complete')
                         break
                     else:
-                        self._log(MythLog.RECORD, MythLog.DEBUG, 'TuneChannel stream FIFO queue empting block retrieved, size={0}'.format(len(chunk)))
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying block retrieved, size={0}'.format(len(chunk)))
         if samechannel:
-            self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning request to same channel {0} while streaming ignored'.format(c))
+            self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel request to same channel {0} while streaming ignored'.format(c))
         self._work.set()
 
     def getChannel(self):
