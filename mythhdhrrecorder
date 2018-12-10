@@ -577,6 +577,23 @@ class TransportStreamReaderThread(object):
     def tuneChannel(self, channel):
         c = channelNormalize(channel)
         if c not in self._channels:
+            with self._lock:
+                if self._stream:
+                    try:
+                        self._stream.connection.close()
+                    except (requests.exceptions.RequestException, AttributeError):
+                        pass
+                self._stream = None
+                self._channel = None
+                self._state = None
+                while True:
+                    try:
+                        chunk = self._FIFO.get(block=False)
+                    except queue.Empty:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying complete')
+                        break
+                    else:
+                        self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying block retrieved, size={0}'.format(len(chunk)))
             raise ValueError('Channel {0} not available'.format(c))
         samechannel = False
         with self._lock:
