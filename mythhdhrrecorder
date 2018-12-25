@@ -25,10 +25,13 @@ import re
 import queue
 import argparse
 import socket
-import inspect
 import os
 import io
 import datetime
+import ipaddress
+import zlib
+import struct
+import urllib
 
 
 # Logging is "complicated" because (a) we are running
@@ -255,35 +258,105 @@ except ImportError:
 
         def __call__(self, mask, level, message, detail=None):
             self.log(mask, level, message, detail)
-        
 
-def HDHRdiscover():
 
-    #
-    # Try a few different ways to identify eligible HDHRs
-    #
-    #
-    # First, obtain list from my.hdhomerun.com (SD provided service)
-    #
-    # Second, try to get a list of IP addresses that appear to
-    # be tuners (via a hand constructed packet (we just collect
-    # the IP addresses, and then perform a discovery)
-    #
+class HDHOMERUN_DEFINES(object):
+
+    HDHOMERUN_CHANNELSCAN_PROGRAM_NORMAL       = 0
+    HDHOMERUN_CHANNELSCAN_PROGRAM_NODATA       = 1
+    HDHOMERUN_CHANNELSCAN_PROGRAM_CONTROL      = 2
+    HDHOMERUN_CHANNELSCAN_PROGRAM_ENCRYPTED    = 3
+    HDHOMERUN_CONTROL_CONNECT_TIMEOUT          = 2500
+    HDHOMERUN_CONTROL_SEND_TIMEOUT             = 2500
+    HDHOMERUN_CONTROL_RECV_TIMEOUT             = 2500
+    HDHOMERUN_CONTROL_UPGRADE_TIMEOUT          = 30000
+    HDHOMERUN_DEBUG_HOST                       = "debug.silicondust.com"
+    HDHOMERUN_DEBUG_PORT                       = 8002
+    HDHOMERUN_DEBUG_CONNECT_RETRY_TIME         = 30000
+    HDHOMERUN_DEBUG_CONNECT_TIMEOUT            = 10000
+    HDHOMERUN_DEBUG_SEND_TIMEOUT               = 10000
+    HDHOMERUN_DEVICE_MAX_TUNE_TO_LOCK_TIME     = 1500
+    HDHOMERUN_DEVICE_MAX_LOCK_TO_DATA_TIME     = 2000
+    HDHOMERUN_DEVICE_MAX_TUNE_TO_DATA_TIME     = (HDHOMERUN_DEVICE_MAX_TUNE_TO_LOCK_TIME + HDHOMERUN_DEVICE_MAX_LOCK_TO_DATA_TIME)
+    HDHOMERUN_TARGET_PROTOCOL_UDP              = "udp"
+    HDHOMERUN_TARGET_PROTOCOL_RTP              = "rtp"
+    HDHOMERUN_DISCOVER_MAX_SOCK_COUNT          = 16
+    HDHOMERUN_DISCOVER_UDP_PORT                = 65001
+    HDHOMERUN_CONTROL_TCP_PORT                 = 65001
+    HDHOMERUN_MAX_PACKET_SIZE                  = 1460
+    HDHOMERUN_MAX_PAYLOAD_SIZE                 = 1452
+    HDHOMERUN_TYPE_DISCOVER_REQ                = 0x0002
+    HDHOMERUN_TYPE_DISCOVER_RPY                = 0x0003
+    HDHOMERUN_TYPE_GETSET_REQ                  = 0x0004
+    HDHOMERUN_TYPE_GETSET_RPY                  = 0x0005
+    HDHOMERUN_TYPE_UPGRADE_REQ                 = 0x0006
+    HDHOMERUN_TYPE_UPGRADE_RPY                 = 0x0007
+    HDHOMERUN_TAG_DEVICE_TYPE                  = 0x01
+    HDHOMERUN_TAG_DEVICE_ID                    = 0x02
+    HDHOMERUN_TAG_GETSET_NAME                  = 0x03
+    HDHOMERUN_TAG_GETSET_VALUE                 = 0x04
+    HDHOMERUN_TAG_GETSET_LOCKKEY               = 0x15
+    HDHOMERUN_TAG_ERROR_MESSAGE                = 0x05
+    HDHOMERUN_TAG_TUNER_COUNT                  = 0x10
+    HDHOMERUN_TAG_DEVICE_AUTH_BIN              = 0x29
+    HDHOMERUN_TAG_BASE_URL                     = 0x2A
+    HDHOMERUN_TAG_DEVICE_AUTH_STR              = 0x2B
+    HDHOMERUN_DEVICE_TYPE_WILDCARD             = 0xFFFFFFFF
+    HDHOMERUN_DEVICE_TYPE_TUNER                = 0x00000001
+    HDHOMERUN_DEVICE_TYPE_STORAGE              = 0x00000005
+    HDHOMERUN_DEVICE_ID_WILDCARD               = 0xFFFFFFFF
+    HDHOMERUN_MIN_PEEK_LENGTH                  = 4
+    HDHOMERUN_STATUS_COLOR_NEUTRAL             = 0xFFFFFFFF
+    HDHOMERUN_STATUS_COLOR_RED                 = 0xFFFF0000
+    HDHOMERUN_STATUS_COLOR_YELLOW              = 0xFFFFFF00
+    HDHOMERUN_STATUS_COLOR_GREEN               = 0xFF00C000
+    HDHOMERUN_CHANNELSCAN_MAX_PROGRAM_COUNT    = 64
+
+
+class ThreadWithReturn(threading.Thread):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._return = None
+
+    def run(self):
+        if self._target is not None:
+            self._return = self._target(*self._args, **self._kwargs)
+
+    def join(self, *args, **kwargs):
+        super().join(*args, **kwargs)
+        return self._return
+
+
+def HDHRDiscoverTunersByCloud(startupDelay=0):
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: making request to SD cloud server for tuner list with delay {}'.format(startupDelay))
+
+    time.sleep(startupDelay)
 
     discoveredTuners = {}
 
     SDdiscover = []
     try:
-        r = requests.get('https://my.hdhomerun.com/discover', timeout=(.5, .2))
+        r = requests.get('https://my.hdhomerun.com/discover', timeout=(3, 1))
         r.raise_for_status()
         SDdiscover = r.json()
+    except requests.exceptions.RequestException:
+        log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: request to SD cloud failed')
+        return discoveredTuners
+    except json.decoder.JSONDecodeError:
+        log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: response from SD cloud was not decodable')
+        return discoveredTuners
+    else:
         if not isinstance(SDdiscover, list):
-            SDdiscover = []
-    except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
-        SDdiscover = []
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: response from SD cloud was not a list')
+            return discoveredTuners
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: processing response from SD cloud: {0}'.format(SDdiscover))
 
     for device in SDdiscover:
         if not isinstance(device, dict):
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: response from SD cloud was not a list of dicts')
             continue
         Legacy = False
         DeviceID = None
@@ -291,73 +364,257 @@ def HDHRdiscover():
         LocalIP = None
         if 'Legacy' in device:
             Legacy = bool(device['Legacy'])
+        device['Legacy'] = Legacy
         if 'DeviceID' in device:
             DeviceID = device['DeviceID']
         if 'DiscoverURL' in device:
             DiscoverURL = device['DiscoverURL']
         if 'LocalIP' in device:
-            LocalIP = device['LocalIP']
+            try:
+                LocalIP = ipaddress.ip_address(device['LocalIP']).compressed
+            except ValueError:
+                LocalIP = None
 
-        if (Legacy) or (DeviceID is None) or (DiscoverURL is None) or (LocalIP is None):
+        if (DeviceID is None) or (DiscoverURL is None) or (LocalIP is None):
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: skipped device from SD cloud (not a tuner): {0}'.format(device))
             continue
 
-        log(MythLog.RECORD, MythLog.DEBUG, 'discovered hdhomerun device from silicondust cloud: {0}'.format(LocalIP))
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: accepted tuner {0} from SD cloud response'.format(DeviceID))
 
-        discoveredTuners[LocalIP] = DiscoverURL
+        discoveredTuners[DeviceID] = device
 
-    discovery_udp_port = 65001
-    # Hand constructed discovery message (device type = tuner, device id = wildcard)
-    discovery_udp_msg = bytearray.fromhex('00 02 00 0c 01 04 00 00 00 01 02 04 ff ff ff ff 4e 50 7f 35')
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: returning discoved/accepted tuners:{0}'.format(discoveredTuners))
+
+    return discoveredTuners
+
+
+def HDHRDiscoverTunersByBroadcast(startupDelay=0):
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: performing local broadcast discovery with delay {}'.format(startupDelay))
+
+    time.sleep(startupDelay)
+
+    discoveredTuners = {}
+
+    # Build our discovery packet payload (based on libhdhomerun)
+    discoveryPayload = bytearray()
+    discoveryPayload.extend(struct.pack('>BBIBBI',
+                            HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_TYPE,
+                            4,
+                            HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER,
+                            HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_ID,
+                            4,
+                            HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_ID_WILDCARD))
+    # Build our discovery broadcast packet (based on libhdhomerun)
+    discoveryPacket = bytearray()
+    discoveryPacket.extend(struct.pack('>H', HDHOMERUN_DEFINES.HDHOMERUN_TYPE_DISCOVER_REQ))
+    discoveryPacket.extend(struct.pack('>H', len(discoveryPayload)))
+    discoveryPacket.extend(discoveryPayload)
+    discoveryPacket.extend(struct.pack('<I', zlib.crc32(discoveryPacket) & 0xffffffff))
+
+    # Send discovery packet, and process replies
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.settimeout(.2)
+    sock.settimeout(.1)
     for i in range(2):
-        sock.sendto(discovery_udp_msg, ('<broadcast>', discovery_udp_port))
-        while True:
-            try:
-                (buf, addr) = sock.recvfrom(2048)
-            except socket.timeout:
-                break
-            if addr is None:
-                continue
-            if buf is None:
-                continue
-
-            log(MythLog.RECORD, MythLog.DEBUG, 'discovered hdhomerun device by local broadcast response: {0}'.format(addr[0]))
-
-            DiscoverURL = 'http://' + addr[0] + ':80/discover.json'
-            discoveredTuners[addr[0]] = DiscoverURL
-
-    eligibleTuners = []
-
-    for device in discoveredTuners:
-        discoverResponse = {}
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: sending hdhomerun broadcast discovery packet')
         try:
-            r = requests.get(discoveredTuners[device], timeout=(.2, .2))
-            r.raise_for_status()
-            discoverResponse = r.json()
-            if not isinstance(discoverResponse, dict):
-                discoverResponse = {}
-        except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
+            sock.sendto(discoveryPacket, ('<broadcast>', HDHOMERUN_DEFINES.HDHOMERUN_DISCOVER_UDP_PORT))
+        except OSError as e:
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: error in sendto: {}'.format(e))
+            continue
+        start = time.time()
+        while ((time.time() - start) < .2):
+            try:
+                (responsePacket, addr) = sock.recvfrom(2048)
+            except socket.timeout:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: timeout waiting for response to broadcast discovery')
+                continue
+            except OSError as e:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: error in recvfrom: {}'.format(e))
+                continue
+            else:
+               log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: received reply from broadcast discovery')
+            if not isinstance(addr, tuple):
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet addr is not a tuple')
+                continue
+            if len(addr) == 0:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet addr has no elements')
+                continue
+            if responsePacket is None:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet did not have a payload')
+                continue
+            if len(responsePacket) > HDHOMERUN_DEFINES.HDHOMERUN_MAX_PACKET_SIZE:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet too big')
+                continue
+            if len(responsePacket) < 8:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet too small')
+                continue
+            if struct.unpack_from('>H', responsePacket, offset=0)[0] != HDHOMERUN_DEFINES.HDHOMERUN_TYPE_DISCOVER_RPY:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet is not a reply')
+                continue
+            if (zlib.crc32(responsePacket[:-4]) & 0xffffffff) != (struct.unpack_from('<I', responsePacket, offset=-4)[0]):
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response crc is bad')
+                continue
+            responsePayloadLength = struct.unpack_from('>H', responsePacket, offset=2)[0]
+            if len(responsePacket) != (8 + responsePayloadLength):
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload length inconsistent with packet length')
+                continue
+
+            responsePayload = responsePacket[4:-4]
+            responsePayloadPointer = 0
+            DeviceID = None
+            BaseURL = None
+            DiscoverURL = None
+            LocalIP = None
+            Legacy = False
+
+            while (responsePayloadPointer <= (responsePayloadLength - 2)):
+                tag, vlen = struct.unpack_from('>BB', responsePayload, offset=responsePayloadPointer)[0:2]
+                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_TYPE:
+                    if vlen != 4:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type not proper length')
+                        break
+                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type length exceeds payload')
+                        break
+                    value = struct.unpack_from('>I',responsePayload, offset=responsePayloadPointer+2)[0]
+                    if value != HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type was not tuner')
+                        break
+                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_ID:
+                    if vlen != 4:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device id not proper length')
+                        break
+                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device id length exceeds payload')
+                        break
+                    value = struct.unpack_from('>I',responsePayload, offset=responsePayloadPointer+2)[0]
+                    DeviceID = '{:02X}'.format(value)
+                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_BASE_URL:
+                    if (responsePayloadLength - responsePayloadPointer- 2) < vlen:
+                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload baseurl length exceeds payload')
+                        break
+                    BaseURL = responsePayload[responsePayloadPointer+2:responsePayloadPointer+2+vlen].decode("utf-8") 
+                    DiscoverURL = BaseURL  + '/discover.json'
+                responsePayloadPointer += (2 + vlen)
+
+            try:
+                LocalIP = ipaddress.ip_address(addr[0]).compressed
+            except ValueError:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet source address was not decodable')
+                continue
+
+            # Determine if legacy device (based on libhdhomerun coding)
+            if DeviceID is not None:
+                if DeviceID[0:3] in ['101', '102', '103', '111', '121', '122'] or \
+                   DeviceID[0:4] in ['1000', '1001', '1002', '1003', '1200', '1201', '1202']:
+                    Legacy = True
+
+            if (LocalIP is None) or (DeviceID is None) or (BaseURL is None) or (DiscoverURL is None):
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload was incomplete')
+                continue
+
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: accepted tuner {0} from local broadcast response'.format(DeviceID))
+
+            discoveredTuners[DeviceID] = {'DeviceID':DeviceID, 'BaseURL':BaseURL, 'DiscoverURL':DiscoverURL, 'LocalIP':LocalIP, 'Legacy':Legacy}
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: returning discoved/accepted tuners:{0}'.format(discoveredTuners))
+
+    return discoveredTuners
+
+
+def HDHRDiscoverLineup(discoverURL):
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: performing discovery with {}'.format(discoverURL))
+
+    discoverResponse = {}
+
+    try:
+        r = requests.get(discoverURL, timeout=(3, 1))
+        r.raise_for_status()
+        discoverResponse = r.json()
+    except requests.exceptions.RequestException:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: request to tuner for discover failed')
+        discoverResponse = {}
+    except json.decoder.JSONDecodeError:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response tuner was not decodeable')
+        discoverResponse = {}
+    else:
+        if not isinstance(discoverResponse, dict):
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response was not a dict')
             discoverResponse = {}
 
-        Legacy = False
-        DeviceID = None
-        LineupURL = None
-        if 'Legacy' in discoverResponse:
-            Legacy = bool(discoverResponse['Legacy'])
-        if 'DeviceID' in discoverResponse:
-            DeviceID = discoverResponse['DeviceID']
-        if 'LineupURL' in discoverResponse:
-            LineupURL = discoverResponse['LineupURL']
+    Legacy = False
+    DeviceID = None
+    LineupURL = None
+    BaseURL = None
+    if 'Legacy' in discoverResponse:
+        Legacy = bool(discoverResponse['Legacy'])
+    if 'DeviceID' in discoverResponse:
+        DeviceID = discoverResponse['DeviceID']
+    if 'LineupURL' in discoverResponse:
+        LineupURL = discoverResponse['LineupURL']
+    if 'BaseURL' in discoverResponse:
+        BaseURL = discoverResponse['BaseURL']
+    else:
+        parsedURL = urllib.parse.urlparse(discoverURL)
+        BaseURL = parsedURL.scheme + '://' + parsedURL.netloc
 
-        if (Legacy) or (DeviceID is None) or (LineupURL is None):
+    if (Legacy) or (DeviceID is None) or (LineupURL is None):
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: Device with discoverURL ' + discoverURL + ' is not a supported tuner'.format())
+        return {'DeviceID': DeviceID, 'LineupURL': LineupURL, 'BaseURL': BaseURL, 'Legacy': Legacy, 'Lineup': None}
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: requesting lineup from tuner')
+
+    hdhrLineup = []
+
+    try:
+        r = requests.get(LineupURL, timeout=(3, 1))
+        r.raise_for_status()
+        hdhrLineup = r.json()
+    except requests.exceptions.RequestException:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: request to tuner for lineup failed')
+        discoverResponse['Lineup'] = None
+        return
+    except json.decoder.JSONDecodeError:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not decodable')
+        discoverResponse['Lineup'] = None
+        return
+    else:
+        if not isinstance(hdhrLineup, list):
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not a list')
+            discoverResponse['Lineup'] = None
+            return
+
+    lineupList = []
+
+    for hdhrChannel in hdhrLineup:
+        channelData = {}
+        if 'GuideNumber' not in hdhrChannel:
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: GuideNumber not in lineup response')
             continue
+        if 'URL' not in hdhrChannel:
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: URL not in lineup response')
+            continue
+        try:
+            guidenumber = channelNormalize(hdhrChannel['GuideNumber'])
+        except TypeError:
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: GuideNumber is malformed')
+            continue
+        favorite = False
+        if 'Favorite' in hdhrChannel:
+            favorite = bool(hdhrChannel['Favorite'])
+        channelData['Favorite'] = favorite
+        channelData['GuideNumber'] = hdhrChannel['GuideNumber']
+        channelData['URL'] = hdhrChannel['URL']
+        lineupList.append(channelData)
 
-        discoverResponse['LocalIP'] = device
-        eligibleTuners.append(discoverResponse)
+    discoverResponse['Lineup'] = lineupList
 
-    return eligibleTuners
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: discoverResponse: {}'.format(discoverResponse))
+
+    return discoverResponse
 
 
 def channelNormalize(channel):
@@ -518,35 +775,26 @@ class TransportStreamReaderThread(object):
         if self._logger is not None:
             self._logger(mask, level, message, detail)
 
-    def addHDHR(self, lineupURL):
-        hdhrLineup = []
-        try:
-            r = requests.get(lineupURL, timeout=(.2, .2))
-            r.raise_for_status()
-            hdhrLineup = r.json()
-            if not isinstance(hdhrLineup, list):
-                hdhrLineup = []
-        except (requests.exceptions.RequestException, json.decoder.JSONDecodeError):
-            hdhrLineup = []
-
-        for hdhrChannel in hdhrLineup:
-            if 'GuideNumber' not in hdhrChannel:
+    def addHDHRLineup(self, lineup):
+        self._log(MythLog.RECORD, MythLog.DEBUG, 'process add {}'.format(lineup))
+        for channel in lineup:
+            if 'GuideNumber' not in channel:
                 continue
-            if 'URL' not in hdhrChannel:
+            if 'URL' not in channel:
                 continue
             try:
-                guidenumber = channelNormalize(hdhrChannel['GuideNumber'])
+                guidenumber = channelNormalize(channel['GuideNumber'])
             except TypeError:
                 continue
             favorite = False
-            if 'Favorite' in hdhrChannel:
-                favorite = hdhrChannel['Favorite']
+            if 'Favorite' in channel:
+                favorite = bool(channel['Favorite'])
             if guidenumber not in self._channels:
                 self._channels[guidenumber] = list()
             if favorite:
-                self._channels[guidenumber].insert(0, hdhrChannel['URL'])
+                self._channels[guidenumber].insert(0, channel['URL'])
             else:
-                self._channels[guidenumber].append(hdhrChannel['URL'])
+                self._channels[guidenumber].append(channel['URL'])
 
     def start(self):
         with self._lock:
@@ -756,11 +1004,11 @@ class TransportStreamReaderThread(object):
 
 if __name__ == '__main__':
 
-    VERSION = 2.0              # This recorders version number (arbitrary value)
+    VERSION = 3.0              # This recorders version number (arbitrary value)
     APIVERSION = 1             # Current API Version
     MAXAPIVERSION = 2          # Maximum API Version this recorder supports
 
-    # Instantiate logging 
+    # Instantiate logging
     log = MythLog(os.path.basename(sys.argv[0]))
 
     # Parse our args
@@ -780,9 +1028,6 @@ if __name__ == '__main__':
 
     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder starting, args: {0}'.format(' '.join(sys.argv[1:])))
 
-    # Discover HDHRs
-    discoveredHDHRs = HDHRdiscover()
-
     # Create our FIFO transport stream buffer
     TransportStreamFIFO = queue.Queue(maxsize=args.queuesize)
 
@@ -790,42 +1035,101 @@ if __name__ == '__main__':
     TSWriter = TransportStreamWriterThread(TransportStreamFIFO, MythLog=log)
     TSReader = TransportStreamReaderThread(TransportStreamFIFO, MythLog=log)
 
-    # If no hdhr provided, use all we know about
-    # otherwise, try to find if the specified device
-    # is something we know about, and use the
-    # discovered lineupurl if possible (or just
-    # create the likely lineupurl).
+
+    # In order to select the tuners, we first need to do device discovery
+    # to determine the device ids and IP addresses.  To reduce the startup
+    # time, perform tuner discovery in parallel
+    discoveredTuners = {}
+    discoverThreads = []
+
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={'startupDelay': 0.3}))
+    discoverThreads[-1].start()
+
+    for t in discoverThreads:
+        r = t.join()
+        if not isinstance(r, dict):
+            log(MythLog.RECORD, MythLog.ERR, "Invalid response from discover request: {}".format(r))
+            continue
+        discoveredTuners.update(r)
+
+    # Due to the need to allow invokation by IP address (without a
+    # known device id) we match and then add to the eligible list
+    # by IP index
+    eligibleTuners = {}
 
     if args.hdhr is None:
         # Add all discovered HDHRs
-        for hdhr in discoveredHDHRs:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR: {0}'.format(hdhr['LocalIP']))
-            TSReader.addHDHR(hdhr['LineupURL'])
-        pass
+        for tuner in discoveredTuners:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner at {0}'.format(discoveredTuners[tuner]['LocalIP']))
+            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
     else:
         for hdhr in args.hdhr:
             if re.match('^[0-9A-Z]{8}$', hdhr.upper()):    # deviceid?
-                for d in discoveredHDHRs:
-                    if d['DeviceID'] == hdhr.upper():
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR specified by deviceid ({0}): {1}'.format(hdhr.upper(), d['LocalIP']))
-                        TSReader.addHDHR(d['LineupURL'])
+                found = False
+                for tuner in discoveredTuners:
+                    if discoveredTuners[tuner]['DeviceID'] == hdhr.upper():
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by deviceid {0} at {1}'.format(discoveredTuners[tuner]['DeviceID'], discoveredTuners[tuner]['LocalIP']))
+                        eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+                        found = True
                         break
+                if not found:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.NOTICE, 'Unable to add tuner specified by deviceid {0} because it was not discovered'.format(hdhr.upper()))
             else:                                          # possible IP or dns
                 try:
-                    ip = socket.getaddrinfo(hdhr, None)[0][4][0]
+                    ip = ipaddress.ip_address(socket.getaddrinfo(hdhr, None)[0][4][0]).compressed
+                except (socket.error, ValueError):
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Unable to add tuner specified by ip {0} because the address could not be resolved'.format(hdhr))
+                else:
                     found = False
-                    for d in discoveredHDHRs:
-                        if d['LocalIP'] == ip:
-                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding discovered HDHR specified by ip ({0}): {1}'.format(hdhr, d['LocalIP']))
-                            TSReader.addHDHR(d['LineupURL'])
+                    for tuner in discoveredTuners:
+                        if discoveredTuners[tuner]['LocalIP'] == ip:
+                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by ip at {0}'.format(discoveredTuners[tuner]['LocalIP']))
+                            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
                             found = True
                             break
                     if found is False:
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding undiscovered HDHR explicitly by user request ({0}): {1}'.format(hdhr, ip))
-                        TSReader.addHDHR('http://' + ip + ':80/lineup.json')
-                except socket.error:
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Unable to resolve specified HDHR: {0}'.format(hdhr))
-                    pass
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from undiscovered tuner specified by ip at {0} by explicit user request'.format(ip))
+                        # Need to try to contact the HDHR and see if it is possible to obtain info
+                        eligibleTuners[ip] = {'LocalIP': ip, 'BaseURL': 'http://' + ip + ':80', 'DiscoverURL': 'http://' + ip + ':80/discover.json'}
+
+    # For each eligibleTuners we want to get the list of channels to
+    # feed to our reader thread
+    discoverLineupThreads = []
+
+    for tuner in eligibleTuners:
+        if 'DiscoverURL' not in eligibleTuners[tuner]:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, "Skipping tuner " + eligibleTuners[tuner] + " because no discoverURL")
+            continue
+        Legacy = False
+        if 'Legacy' in eligibleTuners[tuner]:
+            Legacy = bool(eligibleTuners[tuner]['Legacy'])
+        if Legacy:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['BaseURL']))
+            continue
+        discoverLineupThreads.append(
+                ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
+        discoverLineupThreads[-1].start()
+
+    # Process the response(s) and add lineups to our reader thread
+    for t in discoverLineupThreads:
+        r = t.join()
+        if not isinstance(r, dict):
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid response from lineup request: {}'.format(r))
+            continue
+        if r['Lineup'] is None:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Request for lineup from tuner at {} failed'.format(r['BaseURL']))
+            continue
+        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding {} channels from tuner at {}'.format(len(r['Lineup']), r['BaseURL']))
+        TSReader.addHDHRLineup(r['Lineup'])
+
+
+
 
     # Main loop (reading commands)
 
@@ -837,9 +1141,9 @@ if __name__ == '__main__':
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Keyboard Interrupt, closing recorder')
             break
         except IOError as e:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'IOError reading stdin ({}: {}), closing recorder'.format(e.errno, e.strerr))
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'IOError reading stdin ({}: {}), closing recorder'.format(e.errno, e.strerror))
             break
-        except:
+        except Exception as e:
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Error reading stdin, aborting: ' + sys.exc_info()[0])
             break
         if not command:
@@ -854,8 +1158,8 @@ if __name__ == '__main__':
             cmd = None
             try:
                 serial, cmd = command.split(':', 1)
-            except:
-                pass
+            except ValueError:
+                cmd = ''
             if (serial is None) or (cmd is None):
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'command received is not in API version 2 format: {0}'.format(command))
                 if serial is None:
@@ -873,8 +1177,8 @@ if __name__ == '__main__':
             value = None
             try:
                 value = int(cmd[11:])
-            except Exception as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion is not an integer:' + str(e))
+            except ValueError:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion is not an integer')
                 CommandResponse(serial, 'ERR:' + str(e))
             else:
                 if (value > MAXAPIVERSION):
