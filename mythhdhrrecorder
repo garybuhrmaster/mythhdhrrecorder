@@ -843,10 +843,9 @@ class TransportStreamReaderThread(object):
                     else:
                         self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying block retrieved, size={0}'.format(len(chunk)))
             raise ValueError('Channel {0} not available'.format(c))
-        samechannel = False
         with self._lock:
             if (self._channel == c) and (self._state == 'Streaming') and (self._stream is not None):
-                samechannel = True
+                self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel request to same channel {0} while streaming ignored'.format(c))
             else:
                 if self._stream:
                     try:
@@ -864,8 +863,6 @@ class TransportStreamReaderThread(object):
                         break
                     else:
                         self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel stream FIFO queue emptying block retrieved, size={0}'.format(len(chunk)))
-        if samechannel:
-            self._log(MythLog.RECORD, MythLog.DEBUG, 'tuneChannel request to same channel {0} while streaming ignored'.format(c))
         self._work.set()
 
     def getChannel(self):
