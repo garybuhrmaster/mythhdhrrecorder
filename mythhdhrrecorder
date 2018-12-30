@@ -338,7 +338,7 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
 
     SDdiscover = []
     try:
-        r = requests.get('https://my.hdhomerun.com/discover', timeout=(3, 1))
+        r = requests.get('https://my.hdhomerun.com/discover', timeout=(4, 1))
         r.raise_for_status()
         SDdiscover = r.json()
     except requests.exceptions.RequestException:
@@ -531,7 +531,7 @@ def HDHRDiscoverLineup(discoverURL):
     discoverResponse = {}
 
     try:
-        r = requests.get(discoverURL, timeout=(3, 1))
+        r = requests.get(discoverURL, timeout=(4, 1))
         r.raise_for_status()
         discoverResponse = r.json()
     except requests.exceptions.RequestException:
@@ -570,7 +570,7 @@ def HDHRDiscoverLineup(discoverURL):
     hdhrLineup = []
 
     try:
-        r = requests.get(LineupURL, timeout=(3, 1))
+        r = requests.get(LineupURL, timeout=(4, 1))
         r.raise_for_status()
         hdhrLineup = r.json()
     except requests.exceptions.RequestException:
@@ -615,6 +615,107 @@ def HDHRDiscoverLineup(discoverURL):
     log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: discoverResponse: {}'.format(discoverResponse))
 
     return discoverResponse
+
+
+def HDHRBackgroundDiscovery():
+
+    # In order to select the tuners, we first need to do device discovery
+    # to determine the device ids and IP addresses.  To reduce the startup
+    # time, perform tuner discovery in parallel
+    discoveredTuners = {}
+    discoverThreads = []
+
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={}))
+    discoverThreads[-1].start()
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={'startupDelay': 0.3}))
+    discoverThreads[-1].start()
+
+    for t in discoverThreads:
+        r = t.join()
+        if not isinstance(r, dict):
+            log(MythLog.RECORD, MythLog.ERR, "Invalid response from discover request: {}".format(r))
+            continue
+        discoveredTuners.update(r)
+
+    # Due to the need to allow invokation by IP address (without a
+    # known device id) we match and then add to the eligible list
+    # by IP index
+    eligibleTuners = {}
+
+    if args.hdhr is None:
+        # Add all discovered HDHRs
+        for tuner in discoveredTuners:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner at {0}'.format(discoveredTuners[tuner]['LocalIP']))
+            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+    else:
+        for hdhr in args.hdhr:
+            if re.match('^[0-9A-Z]{8}$', hdhr.upper()):    # deviceid?
+                found = False
+                for tuner in discoveredTuners:
+                    if discoveredTuners[tuner]['DeviceID'] == hdhr.upper():
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by deviceid {0} at {1}'.format(discoveredTuners[tuner]['DeviceID'], discoveredTuners[tuner]['LocalIP']))
+                        eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+                        found = True
+                        break
+                if not found:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.NOTICE, 'Unable to add tuner specified by deviceid {0} because it was not discovered'.format(hdhr.upper()))
+            else:                                          # possible IP or dns
+                try:
+                    ip = ipaddress.ip_address(socket.getaddrinfo(hdhr, None)[0][4][0]).compressed
+                except (socket.error, ValueError):
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Unable to add tuner specified by ip {0} because the address could not be resolved'.format(hdhr))
+                else:
+                    found = False
+                    for tuner in discoveredTuners:
+                        if discoveredTuners[tuner]['LocalIP'] == ip:
+                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by ip at {0}'.format(discoveredTuners[tuner]['LocalIP']))
+                            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+                            found = True
+                            break
+                    if found is False:
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from undiscovered tuner specified by ip at {0} by explicit user request'.format(ip))
+                        # Need to try to contact the HDHR and see if it is possible to obtain info
+                        eligibleTuners[ip] = {'LocalIP': ip, 'BaseURL': 'http://' + ip + ':80', 'DiscoverURL': 'http://' + ip + ':80/discover.json'}
+
+    # For each eligibleTuners we want to get the list of channels to
+    # feed to our reader thread
+    discoverLineupThreads = []
+
+    for tuner in eligibleTuners:
+        if 'DiscoverURL' not in eligibleTuners[tuner]:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, "Skipping tuner " + eligibleTuners[tuner] + " because no discoverURL")
+            continue
+        Legacy = False
+        if 'Legacy' in eligibleTuners[tuner]:
+            Legacy = bool(eligibleTuners[tuner]['Legacy'])
+        if Legacy:
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['BaseURL']))
+            continue
+        discoverLineupThreads.append(
+                ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
+        discoverLineupThreads[-1].start()
+
+    # Process the response(s) and add lineups to our reader thread
+    while (len(discoverLineupThreads) > 0):
+        for i in range(len(discoverLineupThreads) - 1, -1, -1):
+            if not discoverLineupThreads[i].isAlive():
+                r = discoverLineupThreads[i].join()
+                if not isinstance(r, dict):
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid response from lineup request: {}'.format(r))
+                else:
+                    if r['Lineup'] is None:
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Request for lineup from tuner at {} failed'.format(r['BaseURL']))
+                    else:
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding {} channels from tuner at {}'.format(len(r['Lineup']), r['BaseURL']))
+                        TSReader.addHDHRLineup(r['Lineup'])
+                del discoverLineupThreads[i]
+        if (len(discoverLineupThreads) > 0):
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRBackgroundDiscovery: Waiting for completion of discoverLineup threads')
+            time.sleep(.1)
 
 
 def channelNormalize(channel):
@@ -1001,7 +1102,7 @@ class TransportStreamReaderThread(object):
 
 if __name__ == '__main__':
 
-    VERSION = 3.0              # This recorders version number (arbitrary value)
+    VERSION = 4.0              # This recorders version number (arbitrary value)
     APIVERSION = 1             # Current API Version
     MAXAPIVERSION = 2          # Maximum API Version this recorder supports
 
@@ -1032,99 +1133,9 @@ if __name__ == '__main__':
     TSWriter = TransportStreamWriterThread(TransportStreamFIFO, MythLog=log)
     TSReader = TransportStreamReaderThread(TransportStreamFIFO, MythLog=log)
 
-
-    # In order to select the tuners, we first need to do device discovery
-    # to determine the device ids and IP addresses.  To reduce the startup
-    # time, perform tuner discovery in parallel
-    discoveredTuners = {}
-    discoverThreads = []
-
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={}))
-    discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
-    discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={}))
-    discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={'startupDelay': 0.3}))
-    discoverThreads[-1].start()
-
-    for t in discoverThreads:
-        r = t.join()
-        if not isinstance(r, dict):
-            log(MythLog.RECORD, MythLog.ERR, "Invalid response from discover request: {}".format(r))
-            continue
-        discoveredTuners.update(r)
-
-    # Due to the need to allow invokation by IP address (without a
-    # known device id) we match and then add to the eligible list
-    # by IP index
-    eligibleTuners = {}
-
-    if args.hdhr is None:
-        # Add all discovered HDHRs
-        for tuner in discoveredTuners:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner at {0}'.format(discoveredTuners[tuner]['LocalIP']))
-            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
-    else:
-        for hdhr in args.hdhr:
-            if re.match('^[0-9A-Z]{8}$', hdhr.upper()):    # deviceid?
-                found = False
-                for tuner in discoveredTuners:
-                    if discoveredTuners[tuner]['DeviceID'] == hdhr.upper():
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by deviceid {0} at {1}'.format(discoveredTuners[tuner]['DeviceID'], discoveredTuners[tuner]['LocalIP']))
-                        eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
-                        found = True
-                        break
-                if not found:
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.NOTICE, 'Unable to add tuner specified by deviceid {0} because it was not discovered'.format(hdhr.upper()))
-            else:                                          # possible IP or dns
-                try:
-                    ip = ipaddress.ip_address(socket.getaddrinfo(hdhr, None)[0][4][0]).compressed
-                except (socket.error, ValueError):
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Unable to add tuner specified by ip {0} because the address could not be resolved'.format(hdhr))
-                else:
-                    found = False
-                    for tuner in discoveredTuners:
-                        if discoveredTuners[tuner]['LocalIP'] == ip:
-                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from discovered tuner specified by ip at {0}'.format(discoveredTuners[tuner]['LocalIP']))
-                            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
-                            found = True
-                            break
-                    if found is False:
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Requesting lineup from undiscovered tuner specified by ip at {0} by explicit user request'.format(ip))
-                        # Need to try to contact the HDHR and see if it is possible to obtain info
-                        eligibleTuners[ip] = {'LocalIP': ip, 'BaseURL': 'http://' + ip + ':80', 'DiscoverURL': 'http://' + ip + ':80/discover.json'}
-
-    # For each eligibleTuners we want to get the list of channels to
-    # feed to our reader thread
-    discoverLineupThreads = []
-
-    for tuner in eligibleTuners:
-        if 'DiscoverURL' not in eligibleTuners[tuner]:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, "Skipping tuner " + eligibleTuners[tuner] + " because no discoverURL")
-            continue
-        Legacy = False
-        if 'Legacy' in eligibleTuners[tuner]:
-            Legacy = bool(eligibleTuners[tuner]['Legacy'])
-        if Legacy:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['BaseURL']))
-            continue
-        discoverLineupThreads.append(
-                ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
-        discoverLineupThreads[-1].start()
-
-    # Process the response(s) and add lineups to our reader thread
-    for t in discoverLineupThreads:
-        r = t.join()
-        if not isinstance(r, dict):
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid response from lineup request: {}'.format(r))
-            continue
-        if r['Lineup'] is None:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Request for lineup from tuner at {} failed'.format(r['BaseURL']))
-            continue
-        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Adding {} channels from tuner at {}'.format(len(r['Lineup']), r['BaseURL']))
-        TSReader.addHDHRLineup(r['Lineup'])
-
+    # Start HDHR discovery in the background
+    HDHRBackgroundDiscoveryThread = threading.Thread(target=HDHRBackgroundDiscovery)
+    HDHRBackgroundDiscoveryThread.start()
 
 
 
@@ -1250,6 +1261,10 @@ if __name__ == '__main__':
                 CommandResponse(serial, 'OK:No')
         elif (cmd.startswith('TuneChannel:')):
             channel = cmd[12:]
+            start = time.time()                # If needed, wait for for discovery to complete
+            while(((time.time() - start) < 10) and (HDHRBackgroundDiscoveryThread.isAlive())):
+                log(MythLog.RECORD, MythLog.DEBUG, 'Waiting for HDHR discovery to complete before processing TuneChannel')
+                time.sleep(.1)
             try:
                 TSReader.tuneChannel(channel)
             except (ValueError, TypeError) as e:
