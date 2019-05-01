@@ -1044,7 +1044,7 @@ class TransportStreamReaderThread(object):
                         self._stream = None
                         self._channel = None
                         self._state = None
-            elif self._state == 'Streaming':
+            if self._state == 'Streaming':
                 while self._running:
                     start = time.time()
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'trying to read stream block')
