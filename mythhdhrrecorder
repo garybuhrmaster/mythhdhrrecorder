@@ -868,6 +868,11 @@ class TransportStreamReaderThread(object):
         self._lta = 1
         self._running = True
         self._logger = MythLog
+        self._localIP = None
+        self._localPort = None
+        self._tunerIP = None
+        self._tunerPort = None
+        self._tuner = None
         thread = threading.Thread(target=self.run, args=())
         thread.daemon = True
         thread.start()
@@ -917,6 +922,11 @@ class TransportStreamReaderThread(object):
             self._stream = None
             self._channel = None
             self._state = None
+            self._localIP = None
+            self._localPort = None
+            self._tunerIP = None
+            self._tunerPort = None
+            self._tuner = None
         self._running = False
         self._work.set()
 
@@ -998,12 +1008,7 @@ class TransportStreamReaderThread(object):
     def getConnectionAddresses(self):
         if (self._stream is None) or (self._state is not 'Streaming'):
             return None
-        try:
-            sockname = self._stream.raw._original_response.fp.raw._sock.getsockname()
-            peername = self._stream.raw._original_response.fp.raw._sock.getpeername()
-            return([sockname[0], sockname[1], peername[0], peername[1]])
-        except (requests.exceptions.RequestException, socket.error, IndexError, TypeError):
-            return None
+        return(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner)
 
     def run(self):
         while self._running:
@@ -1020,11 +1025,27 @@ class TransportStreamReaderThread(object):
                         try:
                             sockname = self._stream.raw._original_response.fp.raw._sock.getsockname()
                             peername = self._stream.raw._original_response.fp.raw._sock.getpeername()
+                            self._localIP = sockname[0]
+                            self._localPort = sockname[1]
+                            self._tunerIP = peername[0]
+                            self._tunerPort = peername[1]
                             self._log(MythLog.RECORD, MythLog.DEBUG,
                                 'tuning succeeded.  Local socket address {}:{}, remote socket address {}:{}'.
                                 format(sockname[0], sockname[1], peername[0], peername[1]))
                         except (requests.exceptions.RequestException, socket.error, IndexError, TypeError):
+                            self._localIP = None
+                            self._localPort = None
+                            self._tunerIP = None
+                            self._tunerPort = None
                             self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning succeeded (socket information unavailable)')
+                        try:
+                            self._tuner = self._stream.headers.get('X-HDHomeRun-Resource')
+                            self._log(MythLog.RECORD, MythLog.DEBUG,
+                                'tuner succeded, tuner: {}'.format(self._tuner))
+                        except (requests.exceptions.RequestException):
+                            self._tuner = None
+                            self._log(MythLog.RECORD, MythLog.DEBUG,
+                                'tuner succedded, tuner unavailable')
                         with self._lock:
                             self._state = 'Streaming'
                             self._chunksize = 1316 * 40
@@ -1056,6 +1077,11 @@ class TransportStreamReaderThread(object):
                         break
                     if self._state != 'Streaming':
                         break
+                    if self._tuner is None:
+                        try:
+                            self._tuner = self._stream.headers.get('X-HDHomeRun-Resource')
+                        except (requests.exceptions.RequestException):
+                            self._tuner = None
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'stream block read, size={0}'.format(len(chunk)))
                     # Try a bit of adaptive chunk sizing (targeting between .5 and 1 secs),
                     # limited to the "magic" 769860 (which is a multiple of 1316 which is
@@ -1287,9 +1313,10 @@ if __name__ == '__main__':
                 connectionAddresses = TSReader.getConnectionAddresses()
                 if connectionAddresses is not None:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO,
-                        'Tuning successful, connection {}:{} -> {}:{}'.
+                        'Tuning successful, connection {}:{} -> {}:{}, tuner {}'.
                         format(connectionAddresses[0], connectionAddresses[1],
-                               connectionAddresses[2], connectionAddresses[3]))
+                               connectionAddresses[2], connectionAddresses[3],
+                               connectionAddresses[4]))
                 else:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning successful')
                 CommandResponse(serial, 'OK:Yes')
