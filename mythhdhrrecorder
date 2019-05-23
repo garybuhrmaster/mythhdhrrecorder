@@ -1235,7 +1235,7 @@ if __name__ == '__main__':
                     description += ' streaming channel {}'.format(channel)
                 connectionAddresses = TSReader.getConnectionAddresses()
                 if connectionAddresses is not None:
-                    description += ' from {}'.format(connectionAddresses[2])
+                    description += ' from {} tuner {}'.format(connectionAddresses[2], connectionAddresses[4])
             CommandResponse(serial, 'OK:' + description)
         elif (cmd == 'HasPictureAttributes?'):
             if TSReader.hasPictureAttributes():
