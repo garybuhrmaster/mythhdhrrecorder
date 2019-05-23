@@ -1018,8 +1018,8 @@ class TransportStreamReaderThread(object):
                 # for each device with channel
                 # try sequentially
                 for url in self._channels[self._channel]:
+                    self._log(MythLog.RECORD, MythLog.DEBUG, 'trying tuning with url: {0}'.format(url))
                     try:
-                        self._log(MythLog.RECORD, MythLog.DEBUG, 'trying tuning with url: {0}'.format(url))
                         self._stream = requests.get(url, stream=True, timeout=(4, 30))
                         self._stream.raise_for_status()
                         try:
@@ -1029,23 +1029,20 @@ class TransportStreamReaderThread(object):
                             self._localPort = sockname[1]
                             self._tunerIP = peername[0]
                             self._tunerPort = peername[1]
-                            self._log(MythLog.RECORD, MythLog.DEBUG,
-                                'tuning succeeded.  Local socket address {}:{}, remote socket address {}:{}'.
-                                format(sockname[0], sockname[1], peername[0], peername[1]))
                         except (requests.exceptions.RequestException, socket.error, IndexError, TypeError):
                             self._localIP = None
                             self._localPort = None
                             self._tunerIP = None
                             self._tunerPort = None
                             self._log(MythLog.RECORD, MythLog.DEBUG, 'tuning succeeded (socket information unavailable)')
-                        try:
-                            self._tuner = self._stream.headers.get('X-HDHomeRun-Resource')
-                            self._log(MythLog.RECORD, MythLog.DEBUG,
-                                'tuner succeded, tuner: {}'.format(self._tuner))
-                        except (requests.exceptions.RequestException):
-                            self._tuner = None
-                            self._log(MythLog.RECORD, MythLog.DEBUG,
-                                'tuner succedded, tuner unavailable')
+                        else:
+                            try:
+                                self._tuner = self._stream.headers.get('X-HDHomeRun-Resource')
+                            except (requests.exceptions.RequestException):
+                                self._tuner = None
+                        self._log(MythLog.RECORD, MythLog.DEBUG,
+                            'tuning succeeded.  Local socket address {}:{}, remote socket address {}:{}, tuner {}'.
+                            format(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner))
                         with self._lock:
                             self._state = 'Streaming'
                             self._chunksize = 1316 * 40
