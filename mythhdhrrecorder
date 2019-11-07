@@ -147,7 +147,7 @@ except ImportError:
             self._LOGSTREAM.write('{0} {3} [{1}] {2} ' \
                     .format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
                       os.getpid(), self._module,
-                      ['!','A','C','E','W','N','I','D'][level]) + 
+                      ['!','A','C','E','W','N','I','D'][level]) +
                       message + (' -- {0}'.format(detail) if detail else '') + '\n')
             self._LOGSTREAM.flush()
             return
@@ -495,7 +495,7 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
                     if (responsePayloadLength - responsePayloadPointer- 2) < vlen:
                         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload baseurl length exceeds payload')
                         break
-                    BaseURL = responsePayload[responsePayloadPointer+2:responsePayloadPointer+2+vlen].decode("utf-8") 
+                    BaseURL = responsePayload[responsePayloadPointer+2:responsePayloadPointer+2+vlen].decode("utf-8")
                     DiscoverURL = BaseURL  + '/discover.json'
                 responsePayloadPointer += (2 + vlen)
 
