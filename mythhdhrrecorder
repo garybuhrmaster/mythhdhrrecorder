@@ -48,7 +48,7 @@ import urllib
 # 90% borrowed from the existing MythTV.logging class).
 
 try:
-    import MythTV.logging
+    from MythTV.logging import MythLog
 except ImportError:
 
     import syslog
