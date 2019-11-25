@@ -653,7 +653,7 @@ def HDHRBackgroundDiscovery():
             eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
     else:
         for hdhr in args.hdhr:
-            if re.match('^[0-9A-Z]{8}$', hdhr.upper()):    # deviceid?
+            if re.match(r'^[0-9A-Z]{8}$', hdhr.upper()):   # deviceid?
                 found = False
                 for tuner in discoveredTuners:
                     if discoveredTuners[tuner]['DeviceID'] == hdhr.upper():
@@ -720,10 +720,10 @@ def HDHRBackgroundDiscovery():
 
 def channelNormalize(channel):
 
-    m0 = re.match('^(\d+)$', channel)
-    m1 = re.match('^(\d+)\.(\d+)$', channel)
-    m2 = re.match('^(\d+)_(\d+)$', channel)
-    m3 = re.match('^(\d+)-(\d+)$', channel)
+    m0 = re.match(r'^(\d+)$', channel)
+    m1 = re.match(r'^(\d+)\.(\d+)$', channel)
+    m2 = re.match(r'^(\d+)_(\d+)$', channel)
+    m3 = re.match(r'^(\d+)-(\d+)$', channel)
     if m0:
         return '{0}'.format(int(m0.group(1)))
     elif m1:
