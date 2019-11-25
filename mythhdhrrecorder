@@ -416,7 +416,7 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.settimeout(.1)
-    for i in range(2):
+    for _ in range(2):
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: sending hdhomerun broadcast discovery packet')
         try:
             sock.sendto(discoveryPacket, ('<broadcast>', HDHOMERUN_DEFINES.HDHOMERUN_DISCOVER_UDP_PORT))
