@@ -434,7 +434,7 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
                 log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: error in recvfrom: {}'.format(e))
                 continue
             else:
-               log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: received reply from broadcast discovery')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: received reply from broadcast discovery')
             if not isinstance(addr, tuple):
                 log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet addr is not a tuple')
                 continue
@@ -1194,7 +1194,7 @@ if __name__ == '__main__':
             if (serial is None) or (cmd is None):
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'command received is not in API version 2 format: {0}'.format(command))
                 if serial is None:
-                     serial = '0'
+                    serial = '0'
                 CommandResponse(serial, 'ERR:API Version 2 requires serial number')
                 continue
         else:
