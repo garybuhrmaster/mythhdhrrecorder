@@ -338,7 +338,7 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
 
     SDdiscover = []
     try:
-        r = requests.get('https://my.hdhomerun.com/discover', timeout=(4, 1))
+        r = requests.get('https://api.hdhomerun.com/discover', timeout=(4, 1))
         r.raise_for_status()
         SDdiscover = r.json()
     except requests.exceptions.RequestException:
