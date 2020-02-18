@@ -478,7 +478,7 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
                     if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
                         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type length exceeds payload')
                         break
-                    value = struct.unpack_from('>I',responsePayload, offset=responsePayloadPointer+2)[0]
+                    value = struct.unpack_from('>I', responsePayload, offset=responsePayloadPointer+2)[0]
                     if value != HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER:
                         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type was not tuner')
                         break
@@ -489,10 +489,10 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
                     if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
                         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device id length exceeds payload')
                         break
-                    value = struct.unpack_from('>I',responsePayload, offset=responsePayloadPointer+2)[0]
+                    value = struct.unpack_from('>I', responsePayload, offset=responsePayloadPointer+2)[0]
                     DeviceID = '{:02X}'.format(value)
                 if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_BASE_URL:
-                    if (responsePayloadLength - responsePayloadPointer- 2) < vlen:
+                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
                         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload baseurl length exceeds payload')
                         break
                     BaseURL = responsePayload[responsePayloadPointer+2:responsePayloadPointer+2+vlen].decode("utf-8")
@@ -576,16 +576,16 @@ def HDHRDiscoverLineup(discoverURL):
     except requests.exceptions.RequestException:
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: request to tuner for lineup failed')
         discoverResponse['Lineup'] = None
-        return
+        return discoverResponse
     except json.decoder.JSONDecodeError:
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not decodable')
         discoverResponse['Lineup'] = None
-        return
+        return discoverResponse
     else:
         if not isinstance(hdhrLineup, list):
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not a list')
             discoverResponse['Lineup'] = None
-            return
+            return discoverResponse
 
     lineupList = []
 
@@ -695,8 +695,7 @@ def HDHRBackgroundDiscovery():
         if Legacy:
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['BaseURL']))
             continue
-        discoverLineupThreads.append(
-                ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
+        discoverLineupThreads.append(ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
         discoverLineupThreads[-1].start()
 
     # Process the response(s) and add lineups to our reader thread
@@ -1041,8 +1040,8 @@ class TransportStreamReaderThread(object):
                             except (requests.exceptions.RequestException):
                                 self._tuner = None
                         self._log(MythLog.RECORD, MythLog.DEBUG,
-                            'tuning succeeded.  Local socket address {}:{}, remote socket address {}:{}, tuner {}'.
-                            format(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner))
+                                  'tuning succeeded.  Local socket address {}:{}, remote socket address {}:{}, tuner {}'.
+                                  format(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner))
                         with self._lock:
                             self._state = 'Streaming'
                             self._chunksize = 1316 * 40
