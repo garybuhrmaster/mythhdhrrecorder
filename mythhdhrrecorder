@@ -32,6 +32,7 @@ import zlib
 import struct
 import urllib
 import requests
+import dns.resolver
 
 
 # Logging is "complicated" because (a) we are running
@@ -337,6 +338,19 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
     discoveredTuners = {}
 
     SDdiscover = []
+
+    stub = dns.resolver.Resolver()
+    stub.timeout = 2.0
+    stub.lifetime = 3.5
+    try:
+        answers = stub.query('api.hdhomerun.com', 'A')
+    except dns.resolver.DNSException:
+        log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: request to SD cloud failed (DNS lookup failed)')
+        return discoveredTuners
+    if (answers is None) or (not isinstance(answers, dns.resolver.Answer)) or (len(answers) < 1):
+        log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: request to SD cloud failed (DNS lookup returned no rrset)')
+        return discoveredTuners
+
     try:
         r = requests.get('https://api.hdhomerun.com/discover', timeout=(4, 1))
         r.raise_for_status()
