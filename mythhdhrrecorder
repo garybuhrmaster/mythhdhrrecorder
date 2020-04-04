@@ -1308,7 +1308,18 @@ if __name__ == '__main__':
                 CommandResponse(serial, 'ERR:' + str(e))
             else:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning request for channel {0} accepted'.format(channel))
-                CommandResponse(serial, 'OK')
+                CommandResponse(serial, 'OK:InProgress')
+        elif (cmd.startswith('TuneStatus?')):
+            if TSReader.isTuning():
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning in progress')
+                CommandResponse(serial, 'OK:InProgress')
+            else:
+                if TSReader.hasLock():
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning completed')
+                    CommandResponse(serial, 'OK:Tuning completed')
+                else:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
+                    CommandResponse(serial, 'ERR:Tuning failed')
         elif (cmd == 'LockTimeout?'):
             CommandResponse(serial, 'OK:10000')
         elif (cmd == 'SignalStrengthPercent?'):
