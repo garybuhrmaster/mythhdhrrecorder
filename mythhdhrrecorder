@@ -990,7 +990,7 @@ class TransportStreamReaderThread(object):
         self._work.set()
 
     def getChannel(self):
-        if (self._stream is None) or (self._state is not 'Streaming'):
+        if (self._stream is None) or (self._state != 'Streaming'):
             return None
         return self._channel
 
@@ -1019,7 +1019,7 @@ class TransportStreamReaderThread(object):
         return self._state == 'Streaming';
 
     def getConnectionAddresses(self):
-        if (self._stream is None) or (self._state is not 'Streaming'):
+        if (self._stream is None) or (self._state != 'Streaming'):
             return None
         return(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner)
 
