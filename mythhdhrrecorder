@@ -715,7 +715,7 @@ def HDHRBackgroundDiscovery():
     # Process the response(s) and add lineups to our reader thread
     while (len(discoverLineupThreads) > 0):
         for i in range(len(discoverLineupThreads) - 1, -1, -1):
-            if not discoverLineupThreads[i].isAlive():
+            if not discoverLineupThreads[i].is_alive():
                 r = discoverLineupThreads[i].join()
                 if not isinstance(r, dict):
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid response from lineup request: {}'.format(r))
@@ -1298,7 +1298,7 @@ if __name__ == '__main__':
         elif (cmd.startswith('TuneChannel:')):
             channel = cmd[12:]
             start = time.time()                # If needed, wait for for discovery to complete
-            while(((time.time() - start) < 10) and (HDHRBackgroundDiscoveryThread.isAlive())):
+            while(((time.time() - start) < 10) and (HDHRBackgroundDiscoveryThread.is_alive())):
                 log(MythLog.RECORD, MythLog.DEBUG, 'Waiting for HDHR discovery to complete before processing TuneChannel')
                 time.sleep(.1)
             try:
