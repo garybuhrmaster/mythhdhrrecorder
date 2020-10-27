@@ -343,7 +343,10 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
     stub.timeout = 2.0
     stub.lifetime = 3.5
     try:
-        answers = stub.query('api.hdhomerun.com', 'A')
+        if hasattr(stub, 'resolve'):
+            answers = stub.resolve('api.hdhomerun.com', 'A')
+        else:
+            answers = stub.query('api.hdhomerun.com', 'A')
     except dns.resolver.DNSException:
         log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: request to SD cloud failed (DNS lookup failed)')
         return discoveredTuners
