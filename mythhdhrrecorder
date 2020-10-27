@@ -645,10 +645,11 @@ def HDHRBackgroundDiscovery():
     discoveredTuners = {}
     discoverThreads = []
 
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={}))
-    discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
-    discoverThreads[-1].start()
+    if args.usecloud:
+        discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={}))
+        discoverThreads[-1].start()
+        discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
+        discoverThreads[-1].start()
     discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={}))
     discoverThreads[-1].start()
     discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={'startupDelay': 0.3}))
@@ -1161,6 +1162,8 @@ if __name__ == '__main__':
                         help='unique devicename for ExternalRecorder')
     parser.add_argument('--inputid', action='store', type=str, dest='inputid', default='',
                         help='unique inputid for ExternalRecorder')
+    parser.add_argument('--use-cloud-discovery', action='store_true', default=False, dest='usecloud',
+                        help='use the SiliconDust Cloud API services to discover local tuners')
 
     log.loadArgParse(parser)
 
