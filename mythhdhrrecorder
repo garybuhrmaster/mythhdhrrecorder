@@ -378,20 +378,13 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
         if not isinstance(device, dict):
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: response from SD cloud was not a list of dicts')
             continue
-        Legacy = False
-        DeviceID = None
-        DiscoverURL = None
-        LocalIP = None
-        if 'Legacy' in device:
-            Legacy = bool(device['Legacy'])
-        device['Legacy'] = Legacy
-        if 'DeviceID' in device:
-            DeviceID = device['DeviceID']
-        if 'DiscoverURL' in device:
-            DiscoverURL = device['DiscoverURL']
-        if 'LocalIP' in device:
+        Legacy = bool(device.get('Legacy', False))
+        DeviceID = device.get('DeviceID', None)
+        DiscoverURL = device.get('DiscoverURL', None)
+        LocalIP = device.get('LocalIP', None)
+        if LocalIP is not None:
             try:
-                LocalIP = ipaddress.ip_address(device['LocalIP']).compressed
+                LocalIP = ipaddress.ip_address(LocalIP).compressed
             except ValueError:
                 LocalIP = None
 
@@ -565,19 +558,11 @@ def HDHRDiscoverLineup(discoverURL):
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response was not a dict')
             discoverResponse = {}
 
-    Legacy = False
-    DeviceID = None
-    LineupURL = None
-    BaseURL = None
-    if 'Legacy' in discoverResponse:
-        Legacy = bool(discoverResponse['Legacy'])
-    if 'DeviceID' in discoverResponse:
-        DeviceID = discoverResponse['DeviceID']
-    if 'LineupURL' in discoverResponse:
-        LineupURL = discoverResponse['LineupURL']
-    if 'BaseURL' in discoverResponse:
-        BaseURL = discoverResponse['BaseURL']
-    else:
+    Legacy = bool(discoverResponse.get('Legacy', False))
+    DeviceID = discoverResponse.get('DeviceID', None)
+    LineupURL = discoverResponse.get('LineupURL', None)
+    BaseURL = discoverResponse.get('BaseURL', None)
+    if BaseURL is None:
         parsedURL = urllib.parse.urlparse(discoverURL)
         BaseURL = parsedURL.scheme + '://' + parsedURL.netloc
 
@@ -622,10 +607,7 @@ def HDHRDiscoverLineup(discoverURL):
         except TypeError:
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: GuideNumber is malformed')
             continue
-        favorite = False
-        if 'Favorite' in hdhrChannel:
-            favorite = bool(hdhrChannel['Favorite'])
-        channelData['Favorite'] = favorite
+        channelData['Favorite'] = bool(hdhrChannel.get('Favorite', False))
         channelData['GuideNumber'] = hdhrChannel['GuideNumber']
         channelData['URL'] = hdhrChannel['URL']
         lineupList.append(channelData)
@@ -710,10 +692,7 @@ def HDHRBackgroundDiscovery():
         if 'DiscoverURL' not in eligibleTuners[tuner]:
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, "Skipping tuner " + eligibleTuners[tuner] + " because no discoverURL")
             continue
-        Legacy = False
-        if 'Legacy' in eligibleTuners[tuner]:
-            Legacy = bool(eligibleTuners[tuner]['Legacy'])
-        if Legacy:
+        if bool(eligibleTuners[tuner].get('Legacy', False)):
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['BaseURL']))
             continue
         discoverLineupThreads.append(ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['DiscoverURL'],)))
@@ -912,12 +891,9 @@ class TransportStreamReaderThread(object):
                 guidenumber = channelNormalize(channel['GuideNumber'])
             except TypeError:
                 continue
-            favorite = False
-            if 'Favorite' in channel:
-                favorite = bool(channel['Favorite'])
             if guidenumber not in self._channels:
                 self._channels[guidenumber] = list()
-            if favorite:
+            if bool(channel.get('Favorite', False)):
                 self._channels[guidenumber].insert(0, channel['URL'])
             else:
                 self._channels[guidenumber].append(channel['URL'])
