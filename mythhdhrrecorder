@@ -996,10 +996,10 @@ class TransportStreamReaderThread(object):
         return self._state == 'Streaming'
 
     def isTuning(self):
-        return self._state == 'Tuning';
+        return self._state == 'Tuning'
 
     def isStreaming(self):
-        return self._state == 'Streaming';
+        return self._state == 'Streaming'
 
     def getConnectionAddresses(self):
         if (self._stream is None) or (self._state != 'Streaming'):
