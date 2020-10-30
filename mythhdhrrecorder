@@ -560,15 +560,16 @@ def HDHRDiscoverLineup(discoverURL):
 
     Legacy = bool(discoverResponse.get('Legacy', False))
     DeviceID = discoverResponse.get('DeviceID', None)
+    ModelNumber = discoverResponse.get('ModelNumber', None)
     LineupURL = discoverResponse.get('LineupURL', None)
     BaseURL = discoverResponse.get('BaseURL', None)
     if BaseURL is None:
         parsedURL = urllib.parse.urlparse(discoverURL)
         BaseURL = parsedURL.scheme + '://' + parsedURL.netloc
 
-    if (Legacy) or (DeviceID is None) or (LineupURL is None):
+    if (Legacy) or (DeviceID is None) or (LineupURL is None) or (ModelNumber is None):
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: Device with discoverURL ' + discoverURL + ' is not a supported tuner'.format())
-        return {'DeviceID': DeviceID, 'LineupURL': LineupURL, 'BaseURL': BaseURL, 'Legacy': Legacy, 'Lineup': None}
+        return {'DeviceID': DeviceID, 'ModelNumber': ModelNumber, 'LineupURL': LineupURL, 'BaseURL': BaseURL, 'Legacy': Legacy, 'Lineup': None}
 
     log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: requesting lineup from tuner')
 
