@@ -16,6 +16,7 @@
 # limitations under the License.
 #
 
+import operator
 import sys
 import threading
 import time
@@ -895,9 +896,10 @@ class TransportStreamReaderThread(object):
             if guidenumber not in self._channels:
                 self._channels[guidenumber] = list()
             if bool(channel.get('Favorite', False)):
-                self._channels[guidenumber].insert(0, channel['URL'])
+                priority = 1
             else:
-                self._channels[guidenumber].append(channel['URL'])
+                priority = 2
+            self._channels[guidenumber].append({'Priority': priority, 'URL': channel['URL']})
 
     def start(self):
         with self._lock:
@@ -1014,7 +1016,8 @@ class TransportStreamReaderThread(object):
             if self._state == 'Tuning':
                 # for each device with channel
                 # try sequentially
-                for url in self._channels[self._channel]:
+                for sl in sorted(self._channels[self._channel], key=operator.itemgetter('Priority')):
+                    url = sl['URL']
                     self._log(MythLog.RECORD, MythLog.DEBUG, 'trying tuning with url: {0}'.format(url))
                     try:
                         self._stream = requests.get(url, stream=True, timeout=(4, 30))
