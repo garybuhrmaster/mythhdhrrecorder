@@ -560,6 +560,7 @@ def HDHRDiscoverLineup(LocalIP, discoverURL):
             discoverResponse = {}
 
     discoverResponse['LocalIP'] = LocalIP
+    discoverResponse['Lineup'] = None
 
     Legacy = bool(discoverResponse.get('Legacy', False))
     DeviceID = discoverResponse.get('DeviceID', None)
@@ -579,27 +580,26 @@ def HDHRDiscoverLineup(LocalIP, discoverURL):
     hdhrLineup = []
 
     try:
-        r = requests.get(LineupURL, timeout=(4, 1))
+        r = requests.get(LineupURL + '?tuning', timeout=(4, 1))
         r.raise_for_status()
         hdhrLineup = r.json()
     except requests.exceptions.RequestException:
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: request to tuner for lineup failed')
-        discoverResponse['Lineup'] = None
         return discoverResponse
     except json.decoder.JSONDecodeError:
         log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not decodable')
-        discoverResponse['Lineup'] = None
         return discoverResponse
     else:
         if not isinstance(hdhrLineup, list):
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not a list')
-            discoverResponse['Lineup'] = None
             return discoverResponse
 
     lineupList = []
 
     for hdhrChannel in hdhrLineup:
-        channelData = {}
+        if not isinstance(hdhrChannel, dict):
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: response from tuner for lineup was not a list of dicts')
+            continue
         if 'GuideNumber' not in hdhrChannel:
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: GuideNumber not in lineup response')
             continue
@@ -611,10 +611,7 @@ def HDHRDiscoverLineup(LocalIP, discoverURL):
         except TypeError:
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverLineup: GuideNumber is malformed')
             continue
-        channelData['Favorite'] = bool(hdhrChannel.get('Favorite', False))
-        channelData['GuideNumber'] = hdhrChannel['GuideNumber']
-        channelData['URL'] = hdhrChannel['URL']
-        lineupList.append(channelData)
+        lineupList.append(hdhrChannel)
 
     discoverResponse['Lineup'] = lineupList
 
