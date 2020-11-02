@@ -1019,6 +1019,26 @@ class TransportStreamReaderThread(object):
             return None
         return(self._localIP, self._localPort, self._tunerIP, self._tunerPort, self._tuner)
 
+    def getConnectionTunerStatus(self):
+        if (self._stream is None) or (self._state != 'Streaming') or (self._tunerIP is None) or (self._tuner is None):
+            return None
+        try:
+            r = requests.get('http://' + self._tunerIP + ':80' + '/status.json', timeout=(4,1))
+            r.raise_for_status()
+            statusResponse = r.json()
+        except (requests.exceptions.RequestException, IndexError, TypeError):
+            return None
+        if not isinstance(statusResponse, list):
+            log(MythLog.RECORD, MythLog.DEBUG, 'getConnectionTunerStatus: response from tuner for tuner status was not a list')
+            return None
+        for d in statusResponse:
+            if not isinstance(d, dict):
+                log(MythLog.RECORD, MythLog.DEBUG, 'getConnectionTunerStatus: response from tuner for tuner status was not a list of dicts')
+                return None
+            if d.get('Resource', None) == self._tuner:
+                return d
+        return None
+
     def run(self):
         while self._running:
             self._work.wait(self._interval)
@@ -1323,7 +1343,14 @@ if __name__ == '__main__':
             CommandResponse(serial, 'OK:10000')
         elif (cmd == 'SignalStrengthPercent?'):
             if TSReader.hasLock():
-                CommandResponse(serial, 'OK:100')
+                tunerStatus = TSReader.getConnectionTunerStatus()
+                if (tunerStatus is not None):
+                    signalStrength = tunerStatus.get('SignalStrengthPercent', 100)
+                    if not isinstance(signalStrength, int):
+                        signalStrength = 100
+                    CommandResponse(serial, 'OK:{}'.format(signalStrength))
+                else:
+                    CommandResponse(serial, 'OK:100')
             else:
                 CommandResponse(serial, 'OK:0')
         elif (cmd == 'IsOpen?'):
