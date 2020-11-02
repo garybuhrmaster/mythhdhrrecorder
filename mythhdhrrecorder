@@ -654,37 +654,46 @@ def HDHRBackgroundDiscovery():
     eligibleTuners = {}
 
     if args.hdhr is None:
-        # Add all discovered HDHRs
+        # Add all discovered or specified HDHRs if they are not known to be a legacy tuner
         for tuner in discoveredTuners:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {0} added to the eligible list'.format(discoveredTuners[tuner]['LocalIP']))
-            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+            if bool(discoveredTuners[tuner].get('Legacy', False)):
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} is an unsupported legacy tuner'.format(discoveredTuners[tuner]['LocalIP']))
+            else:
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} added to the eligible list'.format(discoveredTuners[tuner]['LocalIP']))
+                eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
     else:
         for hdhr in args.hdhr:
             if re.match(r'^[0-9A-Z]{8}$', hdhr.upper()):   # deviceid?
                 found = False
                 for tuner in discoveredTuners:
                     if discoveredTuners[tuner]['DeviceID'] == hdhr.upper():
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner with deviceid {0} at IP address {1} added to the eligible list'.format(discoveredTuners[tuner]['DeviceID'], discoveredTuners[tuner]['LocalIP']))
-                        eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+                        if bool(discoveredTuners[tuner].get('Legacy', False)):
+                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} with deviceid {} is an unsupported legacy tuner'.format(discoveredTuners[tuner]['LocalIP'], discoveredTuners[tuner]['DeviceID']))
+                        else:
+                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} with deviceid {} added to the eligible list'.format(discoveredTuners[tuner]['LocalIP'], discoveredTuners[tuner]['DeviceID']))
+                            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
                         found = True
                         break
                 if not found:
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.NOTICE, 'Unable to add tuner specified by deviceid {0} because it was not discovered'.format(hdhr.upper()))
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.NOTICE, 'Unable to add tuner specified by deviceid {} because it was not discovered'.format(hdhr.upper()))
             else:                                          # possible IP or dns
                 try:
                     ip = ipaddress.ip_address(socket.getaddrinfo(hdhr, None)[0][4][0]).compressed
                 except (socket.error, ValueError):
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Unable to add tuner specified by IP address {0} because the IP address is invalid'.format(hdhr))
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Unable to add tuner specified by IP address {} because the IP address is invalid'.format(hdhr))
                 else:
                     found = False
                     for tuner in discoveredTuners:
                         if discoveredTuners[tuner]['LocalIP'] == ip:
-                            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {0} added to the eligible list'.format(discoveredTuners[tuner]['LocalIP']))
-                            eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
+                            if bool(discoveredTuners[tuner].get('Legacy', False)):
+                                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} is an unsupported legacy tuner'.format(discoveredTuners[tuner]['LocalIP']))
+                            else:
+                                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} added to the eligible list'.format(discoveredTuners[tuner]['LocalIP']))
+                                eligibleTuners[discoveredTuners[tuner]['LocalIP']] = discoveredTuners[tuner]
                             found = True
                             break
                     if found is False:
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {0} added to the eligible list by explicit user request'.format(ip))
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} added to the eligible list by explicit user request'.format(ip))
                         # Need to try to contact the HDHR and see if it is possible to obtain info
                         eligibleTuners[ip] = {'LocalIP': ip, 'BaseURL': 'http://' + ip + ':80', 'DiscoverURL': 'http://' + ip + ':80/discover.json'}
 
@@ -693,8 +702,11 @@ def HDHRBackgroundDiscovery():
     discoverLineupThreads = []
 
     for tuner in eligibleTuners:
+        if bool(eligibleTuners[tuner].get('Legacy', False)):
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} is an unsupported legacy tuner'.format(eligibleTuners[tuner]['LocalIP']))
+            continue
         if 'DiscoverURL' not in eligibleTuners[tuner]:
-            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, "Skipping tuner " + eligibleTuners[tuner]['LocalIP'] + " because no discoverURL")
+            log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} does not have a valid DiscoverURL'.format(eligibleTuners[tuner]['LocalIP']))
             continue
         discoverLineupThreads.append(ThreadWithReturn(target=HDHRDiscoverLineup, args=(eligibleTuners[tuner]['LocalIP'], eligibleTuners[tuner]['DiscoverURL'],)))
         discoverLineupThreads[-1].start()
@@ -707,10 +719,10 @@ def HDHRBackgroundDiscovery():
                 if not isinstance(r, dict):
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid response from lineup request: {}'.format(r))
                 else:
-                    if (r.get('Legacy', False)) or (r.get('DeviceID', None) is None) or (r.get('LineupURL', None) is None) or (r.get('ModelNumber', None) is None):
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} is an unsupported tuner'.format(r['LocalIP']))
+                    if bool(r.get('Legacy', False)):
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} is an unsupported legacy tuner'.format(r['LocalIP']))
                     elif r.get('Lineup', None) is None:
-                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Request for lineup from tuner at {} failed'.format(r['BaseURL']))
+                        log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} lineup request failed'.format(r['LocalIP']))
                     else:
                         log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuner at IP address {} has {} enabled channels'.format(r['LocalIP'], len(r['Lineup'])))
                         TSReader.addHDHRLineup(r['Lineup'])
