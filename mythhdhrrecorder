@@ -894,6 +894,20 @@ class TransportStreamReaderThread(object):
 
     def addHDHRLineup(self, lineup):
         self._log(MythLog.RECORD, MythLog.DEBUG, 'process add {}'.format(lineup))
+
+        # Do a pre-pass to determine if this tuner
+        # appears to have active atsc3 channels so
+        # that we can de-prioritize the legacy atsc1.0
+        # channels on that device to try to reserve
+        # the ATSC 3.0 capable tuners for ATSC 3.0
+        # content (this is a hueristic that may not
+        # end up being right, but lets try it).
+        ATSC3 = False
+        for channel in lineup:
+            if channel.get('Modulation', 'auto') == 'atsc3':
+                ATSC3 = True
+                break
+
         for channel in lineup:
             if 'GuideNumber' not in channel:
                 continue
@@ -906,9 +920,16 @@ class TransportStreamReaderThread(object):
             if guidenumber not in self._channels:
                 self._channels[guidenumber] = list()
             if bool(channel.get('Favorite', False)):
-                priority = 1
+                if channel.get('Modulation', 'auto') == 'atsc3':
+                    priority = 1
+                else:
+                    priority = 2
+            elif channel.get('Modulation', 'auto') == 'atsc3':
+                priority = 3
+            elif ATSC3:
+                priority = 5
             else:
-                priority = 2
+                priority = 4
             self._channels[guidenumber].append({'Priority': priority, 'URL': channel['URL']})
 
     def start(self):
