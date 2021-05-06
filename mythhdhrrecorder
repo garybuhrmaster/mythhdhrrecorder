@@ -1026,6 +1026,9 @@ class TransportStreamReaderThread(object):
     def setHue(self, hue):
         raise TypeError('Recorder does not support PictureAttributes')
 
+    def getLockTimeout(self):
+        return 15000
+
     def hasLock(self):
         return self._state == 'Streaming'
 
@@ -1361,7 +1364,7 @@ if __name__ == '__main__':
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
                     CommandResponse(serial, 'ERR:Tuning failed')
         elif (cmd == 'LockTimeout?'):
-            CommandResponse(serial, 'OK:10000')
+            CommandResponse(serial, 'OK:{0}'.format(TSReader.getLockTimeout()))
         elif (cmd == 'SignalStrengthPercent?'):
             if TSReader.hasLock():
                 tunerStatus = TSReader.getConnectionTunerStatus()
