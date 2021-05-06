@@ -1355,7 +1355,7 @@ if __name__ == '__main__':
                 CommandResponse(serial, 'OK:InProgress')
             else:
                 if TSReader.hasLock():
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning completed')
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning completed')
                     CommandResponse(serial, 'OK:Tuning completed')
                 else:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
