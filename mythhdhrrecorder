@@ -868,6 +868,8 @@ class TransportStreamReaderThread(object):
         self._FIFO = FIFO
         self._interval = interval
         self._channels = dict()
+        self._channelList = list()
+        self._channelIndex = 0
         self._stream = None
         self._streaming_stop = 0
         self._streaming_stop_delay = .50
@@ -900,7 +902,7 @@ class TransportStreamReaderThread(object):
         # that we can de-prioritize the legacy atsc1.0
         # channels on that device to try to reserve
         # the ATSC 3.0 capable tuners for ATSC 3.0
-        # content (this is a hueristic that may not
+        # content (this is a heuristic that may not
         # end up being right, but lets try it).
         ATSC3 = False
         for channel in lineup:
@@ -931,6 +933,8 @@ class TransportStreamReaderThread(object):
             else:
                 priority = 4
             self._channels[guidenumber].append({'Priority': priority, 'URL': channel['URL']})
+            # For channel scan by ExternalRecorder
+            self._channelList.append(channel)
 
     def start(self):
         with self._lock:
@@ -1176,6 +1180,24 @@ class TransportStreamReaderThread(object):
             else:
                 pass
 
+    def loadChannels(self):
+        return str(len(TSReader._channelList))
+
+    def firstChannel(self):
+        self._channelIndex = 0
+        return self.channelInfo()
+
+    def nextChannel(self):
+        self._channelIndex += 1
+        return self.channelInfo()
+
+    def channelInfo(self):
+        channel = self._channelList[self._channelIndex]
+        r = (channel['GuideNumber'] + ','       # For ATSC major-minor number
+            + channel['GuideName'] + ','        # For ATSC callsign
+            + channel['GuideName'] + ','        # Name
+            + str(channel['ProgramNumber']))    # XMLTVID
+        return r
 
 if __name__ == '__main__':
 
@@ -1338,6 +1360,16 @@ if __name__ == '__main__':
                 CommandResponse(serial, 'OK:Yes')
             else:
                 CommandResponse(serial, 'OK:No')
+        elif (cmd == 'LoadChannels'):
+            start = time.time()                # If needed, wait for for discovery to complete
+            while(((time.time() - start) < 10) and (HDHRBackgroundDiscoveryThread.is_alive())):
+                log(MythLog.RECORD, MythLog.DEBUG, 'Waiting for HDHR discovery to complete before processing LoadChannels')
+                time.sleep(.1)
+            CommandResponse(serial, 'OK:' + TSReader.loadChannels())
+        elif (cmd == 'FirstChannel'):
+            CommandResponse(serial, 'OK:' + TSReader.firstChannel())
+        elif (cmd == 'NextChannel'):
+            CommandResponse(serial, 'OK:' + TSReader.nextChannel())
         elif (cmd.startswith('TuneChannel:')):
             channel = cmd[12:]
             start = time.time()                # If needed, wait for for discovery to complete
