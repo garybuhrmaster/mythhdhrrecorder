@@ -74,7 +74,7 @@ used for those disabled channels).
     specified name is arbitrary, and not used
     by the recorder itself.
 
-  * This program requires python3, and a number
+  * This program requires python3, and a number of
     libraries.  It is useful to run it standalone
     with the --help option before configuring it
     in MythTV to determine if you have the
@@ -110,11 +110,14 @@ used for those disabled channels).
   * Select "External (black box) recorder" as the card type
   * Specify the executable and (usually) append an arbritary unique device
     name, for example: /home/mythtv/bin/mythhdhrrecorder --devicename 0
-  * Specify the Max Recordings as 1
   * Select "Finish" to create the capture card
   * Repeat as needed for the number of tuners you want MythTV to utilize
-  * Perform video source setup as usual
-  * For each tuner, go to input connections and add the video source,
-    and select "Fetch Channels" if the video source is newly created
-    to populate the channel data (this does not work with ATSC video
-    sources due to the major/minor numbering, but workarounds exist)
+  * Select "Video sources" and create a video source
+  * Select "Input Connections"
+  * For each tuner:
+  *   Add the video source
+  *   In "Interactions between inputs"
+  *     Set "Max Recordings" to 1
+  *     Uncheck "Schedule as Group"
+  * Do "Scan for channels" for one tuner only (the video source is shared
+    with all tuners)
