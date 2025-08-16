@@ -34,6 +34,7 @@ import struct
 import urllib
 import requests
 import dns.resolver
+import psutil
 
 
 # Logging is "complicated" because (a) we are running
