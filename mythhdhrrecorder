@@ -729,9 +729,33 @@ def HDHRBackgroundDiscovery():
             log(MythLog.RECORD, MythLog.DEBUG, 'HDHRBackgroundDiscovery: Waiting for completion of discoverLineup threads')
             time.sleep(.1)
 
+def HDHRdiscoverURL(DiscoverURL, BaseURL):
+    """
+    Create a Discover URL from the BaseURL if DiscoverURL is not available
+    """
+    if DiscoverURL is not None:
+        return DiscoverURL
+    if BaseURL is not None:
+        return BaseURL + '/discover.json'
+    return None
+
+
+def HDHRIsLegacy(DeviceID):
+    """
+    Determine if the device is considered to be a legacy tuner (based on libhdhomerun)
+    """
+    # Determine if legacy device (based on libhdhomerun coding)
+    if (DeviceID is not None) and (isinstance(DeviceID, str)) and (len(DeviceID) == 8):
+        if DeviceID[0:3] in ['101', '102', '103', '111', '121', '122'] or \
+           DeviceID[0:4] in ['1000', '1001', '1002', '1003', '1200', '1201', '1202']:
+            return(True)
+    return(False)
+
 
 def channelNormalize(channel):
-
+    """
+    Normalize the channel value to NNNN or NNN.MMM
+    """
     m0 = re.match(r'^(\d+)$', channel)
     m1 = re.match(r'^(\d+)\.(\d+)$', channel)
     m2 = re.match(r'^(\d+)_(\d+)$', channel)
