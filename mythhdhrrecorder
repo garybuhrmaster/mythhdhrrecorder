@@ -610,74 +610,24 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
             if responsePacket is None:
                 log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet did not have a payload')
                 continue
-            if len(responsePacket) > HDHOMERUN_DEFINES.HDHOMERUN_MAX_PACKET_SIZE:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet too big')
+            responseDecoded = HDHRDiscoverResponsePacketDecode(responsePacket)
+            if responseDecoded == {}:
                 continue
-            if len(responsePacket) < 8:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet too small')
-                continue
-            if struct.unpack_from('>H', responsePacket, offset=0)[0] != HDHOMERUN_DEFINES.HDHOMERUN_TYPE_DISCOVER_RPY:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet is not a reply')
-                continue
-            if (zlib.crc32(responsePacket[:-4]) & 0xffffffff) != (struct.unpack_from('<I', responsePacket, offset=-4)[0]):
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response crc is bad')
-                continue
-            responsePayloadLength = struct.unpack_from('>H', responsePacket, offset=2)[0]
-            if len(responsePacket) != (8 + responsePayloadLength):
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload length inconsistent with packet length')
-                continue
-
-            responsePayload = responsePacket[4:-4]
-            responsePayloadPointer = 0
-            DeviceID = None
-            BaseURL = None
-            DiscoverURL = None
-            LocalIP = None
-            Legacy = False
-
-            while (responsePayloadPointer <= (responsePayloadLength - 2)):
-                tag, vlen = struct.unpack_from('>BB', responsePayload, offset=responsePayloadPointer)[0:2]
-                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_TYPE:
-                    if vlen != 4:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type not proper length')
-                        break
-                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type length exceeds payload')
-                        break
-                    value = struct.unpack_from('>I', responsePayload, offset=responsePayloadPointer+2)[0]
-                    if value != HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type was not tuner')
-                        break
-                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_ID:
-                    if vlen != 4:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device id not proper length')
-                        break
-                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device id length exceeds payload')
-                        break
-                    value = struct.unpack_from('>I', responsePayload, offset=responsePayloadPointer+2)[0]
-                    DeviceID = '{:02X}'.format(value)
-                if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_BASE_URL:
-                    if (responsePayloadLength - responsePayloadPointer - 2) < vlen:
-                        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload baseurl length exceeds payload')
-                        break
-                    BaseURL = responsePayload[responsePayloadPointer+2:responsePayloadPointer+2+vlen].decode("utf-8")
-                    DiscoverURL = BaseURL  + '/discover.json'
-                responsePayloadPointer += (2 + vlen)
-
+            DeviceID = responseDecoded.get('DeviceID', None)
+            DeviceType = responseDecoded.get('DeviceType', [])
+            BaseURL = responseDecoded.get('BaseURL', None)
+            DiscoverURL = HDHRdiscoverURL(None, BaseURL)
             try:
                 LocalIP = ipaddress.ip_address(addr[0]).compressed
             except ValueError:
                 log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet source address was not decodable')
+                LocalIP = None
                 continue
-
-            # Determine if legacy device (based on libhdhomerun coding)
-            if DeviceID is not None:
-                if DeviceID[0:3] in ['101', '102', '103', '111', '121', '122'] or \
-                   DeviceID[0:4] in ['1000', '1001', '1002', '1003', '1200', '1201', '1202']:
-                    Legacy = True
-
-            if (LocalIP is None) or (DeviceID is None) or (BaseURL is None) or (DiscoverURL is None):
+            Legacy = HDHRIsLegacy(DeviceID)
+            if HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER not in DeviceType:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type was not tuner')
+                continue
+            if (LocalIP is None) or (DeviceID is None) or (BaseURL is None):
                 log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload was incomplete')
                 continue
 
