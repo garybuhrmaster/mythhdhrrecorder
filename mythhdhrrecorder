@@ -334,6 +334,170 @@ class ThreadWithReturn(threading.Thread):
         return self._return
 
 
+def HDHRDiscoverRequestPacketEncode(deviceType=HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_WILDCARD,
+                                    deviceID=HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_ID_WILDCARD):
+
+    """
+    Return a bytearray with a constructed HDHR discover packet
+
+    Implementation based on libhdhomerun
+    """
+
+    if deviceType is None:
+        deviceType = HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_WILDCARD
+    if deviceID is None:
+        deviceID = HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_ID_WILDCARD
+    if not isinstance(deviceID, int):
+        if not instance(deviceID, str):
+            raise ValueError('DeviceID is not an integer or string')
+        if not re.match(r'^[0-9A-Za-z]{8}$', deviceID):
+            raise ValueError('DeviceID is malformed')
+        deviceID = int(deviceID, 16)
+
+    # Build our discover packet payload (based on libhdhomerun)
+    discoverPayload = bytearray()
+    discoverPayload.extend(struct.pack('>BBIBBI',
+                           HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_TYPE,
+                           4,
+                           deviceType,
+                           HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_ID,
+                           4,
+                           deviceID))
+
+    # Build our discover packet (based on libhdhomerun)
+    discoverPacket = bytearray()
+    discoverPacket.extend(struct.pack('>H', HDHOMERUN_DEFINES.HDHOMERUN_TYPE_DISCOVER_REQ))
+    discoverPacket.extend(struct.pack('>H', len(discoverPayload)))
+    discoverPacket.extend(discoverPayload)
+    discoverPacket.extend(struct.pack('<I', zlib.crc32(discoverPacket) & 0xffffffff))
+
+    return (discoverPacket)
+
+
+def HDHRDiscoverResponsePacketDecode(responsePacket):
+
+    """
+    Return the decoded HDHR discovery response packet
+
+    Implementation based on libhdhomerun
+    """
+
+    decodedPacket = {}
+
+    if responsePacket is None:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response packet did not have a payload')
+        return decodedPacket
+    if (not isinstance(responsePacket, bytearray)) and (not isinstance(responsePacket, bytes)):
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response packet is not a bytearray')
+        return decodedPacket
+    if len(responsePacket) > HDHOMERUN_DEFINES.HDHOMERUN_MAX_PACKET_SIZE:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response packet too big')
+        return decodedPacket
+    if len(responsePacket) < 8:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response packet too small')
+        return decodedPacket
+    if struct.unpack_from('>H', responsePacket, offset=0)[0] != HDHOMERUN_DEFINES.HDHOMERUN_TYPE_DISCOVER_RPY:
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response packet is not a reply')
+        return decodedPacket
+    if (zlib.crc32(responsePacket[:-4]) & 0xffffffff) != (struct.unpack_from('<I', responsePacket, offset=-4)[0]):
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response crc is bad')
+        return decodedPacket
+    responsePayloadLength = struct.unpack_from('>H', responsePacket, offset=2)[0]
+    if len(responsePacket) != (8 + responsePayloadLength):
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload length inconsistent with packet length')
+        return decodedPacket
+
+    responsePayload = responsePacket[4:-4]
+    responsePayloadPointer = 0
+    tag = None
+    vlen = 0
+
+    while (responsePayloadPointer <= (responsePayloadLength - 2)):
+
+        tag, vlen = struct.unpack_from('>BB', responsePayload, offset=responsePayloadPointer)[0:2]
+
+        responsePayloadValuePointer = responsePayloadPointer + 2
+
+        responsePayloadPointer += (2 + vlen)
+
+        if tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_ID:
+            if vlen != 4:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload device id not proper length')
+                continue
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload device id length exceeds payload')
+                continue
+            value = struct.unpack_from('>I', responsePayload, offset=responsePayloadValuePointer)[0]
+            DeviceID = '{:08X}'.format(value)
+            decodedPacket['DeviceID'] = DeviceID
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_TYPE:
+            if vlen != 4:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload device type not proper length')
+                continue
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload device type length exceeds payload')
+                continue
+            value = struct.unpack_from('>I', responsePayload, offset=responsePayloadValuePointer)[0]
+            if 'DeviceType' not in decodedPacket:
+                decodedPacket['DeviceType'] = [ value ]
+            else:
+                if value not in decodedPacket['DeviceType']:
+                    decodedPacket['DeviceType'].append(value)
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_MULTI_TYPE:
+            if (vlen % 4 != 0):
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload device multitype is not proper length')
+                continue
+            for _ in range(0, vlen, 4):
+                value = struct.unpack_from('>I', responsePayload, offset=responsePayloadValuePointer+_)[0]
+                if 'DeviceType' not in decodedPacket:
+                    decodedPacket['DeviceType'] = [ value ]
+                else:
+                    if value not in decodedPacket['DeviceType']:
+                        decodedPacket['DeviceType'].append(value)
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_BASE_URL:
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload baseurl length exceeds payload')
+                continue
+            value = responsePayload[responsePayloadValuePointer:responsePayloadValuePointer+vlen].decode("utf-8")
+            decodedPacket['BaseURL'] = value
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_STORAGE_ID:
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload storageid length exceeds payload')
+                continue
+            value = responsePayload[responsePayloadValuePointer:responsePayloadValuePointer+vlen].decode("utf-8")
+            decodedPacket['StorageID'] = value
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_STORAGE_URL:
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload storageurl length exceeds payload')
+                continue
+            value = responsePayload[responsePayloadValuePointer:responsePayloadValuePointer+vlen].decode("utf-8")
+            decodedPacket['StorageURL'] = value
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_LINEUP_URL:
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload lineupurl length exceeds payload')
+                continue
+            value = responsePayload[responsePayloadValuePointer:responsePayloadValuePointer+vlen].decode("utf-8")
+            decodedPacket['LineupURL'] = value
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_DEVICE_AUTH_STR:
+            if (responsePayloadLength - responsePayloadValuePointer) < vlen:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode: response payload lineupurl length exceeds payload')
+                continue
+            value = responsePayload[responsePayloadValuePointer:responsePayloadValuePointer+vlen].decode("utf-8")
+            decodedPacket['DeviceAuth'] = value
+        elif tag == HDHOMERUN_DEFINES.HDHOMERUN_TAG_TUNER_COUNT:
+            if vlen != 1:
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePackedDecode: response payload tuner count not proper length')
+                continue
+            value = struct.unpack_from('>B', responsePayload, offset=responsePayloadValuePointer)[0]
+            decodedPacket['TunerCount'] = value
+        else:
+            pass
+
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverResponsePacketDecode response: {}'.format(decodedPacket))
+
+    return (decodedPacket)
+
+
 def HDHRDiscoverTunersByCloud(startupDelay=0):
 
     log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByCloud: making request to SD cloud server for tuner list with delay {}'.format(startupDelay))
