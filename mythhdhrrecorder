@@ -567,9 +567,9 @@ def HDHRDiscoverTunersByCloud(startupDelay=0):
     return discoveredTuners
 
 
-def HDHRDiscoverTunersByBroadcast(startupDelay=0):
+def HDHRDiscoverTunersByIPv4Broadcast(startupDelay=0):
 
-    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: performing local broadcast discovery with delay {}'.format(startupDelay))
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: performing local broadcast discovery with delay {}'.format(startupDelay))
 
     time.sleep(startupDelay)
 
@@ -583,32 +583,32 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.settimeout(.1)
     for _ in range(2):
-        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: sending hdhomerun broadcast discovery packet')
+        log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: sending hdhomerun broadcast discovery packet')
         try:
             sock.sendto(discoverPacket, ('<broadcast>', HDHOMERUN_DEFINES.HDHOMERUN_DISCOVER_UDP_PORT))
         except OSError as e:
-            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: error in sendto: {}'.format(e))
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: error in sendto: {}'.format(e))
             continue
         start = time.time()
         while ((time.time() - start) < .2):
             try:
                 (responsePacket, addr) = sock.recvfrom(2048)
             except socket.timeout:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: timeout waiting for response to broadcast discovery')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: timeout waiting for response to broadcast discovery')
                 continue
             except OSError as e:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: error in recvfrom: {}'.format(e))
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: error in recvfrom: {}'.format(e))
                 continue
             else:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: received reply from broadcast discovery')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: received reply from broadcast discovery')
             if not isinstance(addr, tuple):
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet addr is not a tuple')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response packet addr is not a tuple')
                 continue
             if len(addr) == 0:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet addr has no elements')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response packet addr has no elements')
                 continue
             if responsePacket is None:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet did not have a payload')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response packet did not have a payload')
                 continue
             responseDecoded = HDHRDiscoverResponsePacketDecode(responsePacket)
             if responseDecoded == {}:
@@ -620,22 +620,22 @@ def HDHRDiscoverTunersByBroadcast(startupDelay=0):
             try:
                 LocalIP = ipaddress.ip_address(addr[0]).compressed
             except ValueError:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response packet source address was not decodable')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response packet source address was not decodable')
                 LocalIP = None
                 continue
             Legacy = HDHRIsLegacy(DeviceID)
             if HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_TUNER not in DeviceType:
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload device type was not tuner')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response payload device type was not tuner')
                 continue
             if (LocalIP is None) or (DeviceID is None) or (BaseURL is None):
-                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: response payload was incomplete')
+                log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: response payload was incomplete')
                 continue
 
-            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: accepted tuner {0} from local broadcast response'.format(DeviceID))
+            log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: accepted tuner {0} from local broadcast response'.format(DeviceID))
 
             discoveredTuners[DeviceID] = {'DeviceID':DeviceID, 'BaseURL':BaseURL, 'DiscoverURL':DiscoverURL, 'LocalIP':LocalIP, 'Legacy':Legacy}
 
-    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByBroadcast: returning discoved/accepted tuners:{0}'.format(discoveredTuners))
+    log(MythLog.RECORD, MythLog.DEBUG, 'HDHRDiscoverTunersByIPv4Broadcast: returning discoved/accepted tuners:{0}'.format(discoveredTuners))
 
     return discoveredTuners
 
@@ -735,9 +735,9 @@ def HDHRBackgroundDiscovery():
         discoverThreads[-1].start()
         discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByCloud, args=(), kwargs={'startupDelay': 0.5}))
         discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={}))
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByIPv4Broadcast, args=(), kwargs={}))
     discoverThreads[-1].start()
-    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByBroadcast, args=(), kwargs={'startupDelay': 0.3}))
+    discoverThreads.append(ThreadWithReturn(target=HDHRDiscoverTunersByIPv4Broadcast, args=(), kwargs={'startupDelay': 0.3}))
     discoverThreads[-1].start()
 
     for t in discoverThreads:
