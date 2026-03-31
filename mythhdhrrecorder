@@ -335,6 +335,86 @@ class ThreadWithReturn(threading.Thread):
         return self._return
 
 
+def getInterfacesByIndex():
+    """
+
+    Return the list of interfaces and addresses on a system, hashed by interface index
+    (because most of the socket code is based on ifindex)
+
+        { ifindex0:
+            { 'isup': True/False,
+              'ifname': ifname,
+              'IPv4': [ { 'address': ipaddr, 'netmask': netmask, 'broadcast': broadcast, 'ifname': ifname }, ... ].
+              'IPv6': [ { 'address': ipaddr, 'netmask': netmask, 'broadcast': broadcast, 'ifname': ifname }, ... ]
+            } ,
+          ifindex1:
+            { 'isup': True/False,
+              'ifname': ifname,
+              'IPv4': [ ... ],
+              'IPv6': [ ... ]
+            } ,
+          ...
+        }
+
+    Note that multiple ifnames may end up with the same index
+    due to interface aliasing, but socket bind and if_stats
+    uses the base ifindex/ifname so we only really care about
+    the ifindex and it's ifname (but for human consumption,
+    we provide the ifname per address).
+
+    Note that linux may rename an interface before an IP
+    address is assigned (but once up and an IP address
+    address is assigned, the ifname cannot be changed).
+
+    """
+
+    ifindexes = {}
+
+    try:
+        addrs = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+    except OSError:
+        return ifindexes
+
+    for interface, snics in addrs.items():
+        try:
+            index = socket.if_nametoindex(interface)
+        except OSError:
+            continue
+        if (index is None) or (not isinstance(index, int)) or (index == 0):
+            continue
+        if index not in ifindexes:
+            ifindexes[index] = {}
+            ifindexes[index]['isup'] = False
+            ifindexes[index]['ifname'] = None
+            ifindexes[index]['IPv4'] = []
+            ifindexes[index]['IPv6'] = []
+        try:
+            # Need the base interface name for interface aliases
+            interface_basename = socket.if_indextoname(index)
+            ifindexes[index]['ifname'] = interface_basename
+            if interface_basename in stats:
+                ifindexes[index]['isup'] = getattr(stats[interface_basename], 'isup', False)
+            else:
+                ifindexes[index]['isup'] = False
+        except OSError:
+            ifindexes[index]['isup'] = False
+            ifindexes[index]['ifname'] = None
+        for snic in snics:
+            if snic.family == socket.AF_INET:
+                ifindexes[index]['IPv4'].append({'address': getattr(snic, 'address', None),
+                                                 'netmask': getattr(snic, 'netmask', None),
+                                                 'broadcast': getattr(snic, 'broadcast', None),
+                                                 'ifname': interface})
+            if snic.family == socket.AF_INET6:
+                ifindexes[index]['IPv6'].append({'address': getattr(snic, 'address', None),
+                                                 'netmask': getattr(snic, 'netmask', None),
+                                                 'broadcast': getattr(snic, 'broadcast', None),
+                                                 'ifname': interface})
+
+    return ifindexes
+
+
 def HDHRDiscoverRequestPacketEncode(deviceType=HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_TYPE_WILDCARD,
                                     deviceID=HDHOMERUN_DEFINES.HDHOMERUN_DEVICE_ID_WILDCARD):
 
