@@ -1010,6 +1010,8 @@ def channelNormalize(channel):
     """
     Normalize the channel value to NNNN or NNN.MMM
     """
+    if channel is None:
+        raise TypeError('Invalid channel: None')
     m0 = re.match(r'^(\d+)$', channel)
     m1 = re.match(r'^(\d+)\.(\d+)$', channel)
     m2 = re.match(r'^(\d+)_(\d+)$', channel)
@@ -1025,9 +1027,20 @@ def channelNormalize(channel):
     raise TypeError('Invalid channel: {0}'.format(channel))
 
 
-def CommandResponse(serial, response):
-    if serial is not None:
-        response = serial + ':' + response
+def CommandResponse(apiversion, serial, command, status, message):
+    if apiversion == 3:
+        responsedict = dict()
+        responsedict['command'] = command
+        responsedict['serial'] = serial
+        responsedict['status'] = status
+        responsedict['message'] = message
+        response = json.dumps(responsedict)
+    elif apiversion == 2:
+        response = str(serial) + ':' + status + ':' + str(message)
+    elif apiversion == 1:
+        response = status + ':' + str(message)
+    else:
+        response = 'ERR:Unsupported API version (internal error)'
     log(MythLog.RECORD, MythLog.DEBUG, 'command reply: {0}'.format(response))
     sys.stderr.write(response + '\n')
     sys.stderr.flush()
@@ -1243,7 +1256,10 @@ class TransportStreamReaderThread(object):
         return True
 
     def tuneChannel(self, channel):
-        c = channelNormalize(channel)
+        try:
+            c = channelNormalize(channel)
+        except TypeError:
+            raise ValueError('Channel {0} is invalid'.format(channel))
         if c not in self._channels:
             with self._lock:
                 if self._stream:
@@ -1306,6 +1322,7 @@ class TransportStreamReaderThread(object):
         raise TypeError('Recorder does not support PictureAttributes')
 
     def getLockTimeout(self):
+        # Typically less an 3.5 seconds per tuner, but multiple tuners may need to be tried
         return 15000
 
     def hasLock(self):
@@ -1458,9 +1475,9 @@ class TransportStreamReaderThread(object):
 
 if __name__ == '__main__':
 
-    VERSION = 4.0              # This recorders version number (arbitrary value)
+    VERSION = 5.0              # This recorders version number (arbitrary value)
     APIVERSION = 1             # Current API Version
-    MAXAPIVERSION = 2          # Maximum API Version this recorder supports
+    MAXAPIVERSION = 3          # Maximum API Version this recorder supports
 
     # Instantiate logging
     log = MythLog(os.path.basename(sys.argv[0]))
@@ -1502,8 +1519,6 @@ if __name__ == '__main__':
     HDHRBackgroundDiscoveryThread = threading.Thread(target=HDHRBackgroundDiscovery)
     HDHRBackgroundDiscoveryThread.start()
 
-
-
     # Main loop (reading commands)
 
     while True:
@@ -1526,45 +1541,85 @@ if __name__ == '__main__':
 
         log(MythLog.RECORD, MythLog.DEBUG, 'command received: {0}'.format(command))
 
-        if (APIVERSION > 1):
-            serial = None
-            cmd = None
+        serial = 0
+        cmd = ''
+        value = None
+
+        #
+        # The external recorder versions is "complicated" (and arguably
+        # wrongly implemented). Typically the first command from the BE
+        # is APIVersion?, with the external recording returning the
+        # highest version supported, and it is expected to move to that
+        # version for further communications.  However, if that version
+        # is higher than the BE supports, the BE will respond with a
+        # lower APIVersion: version.  That can result in failure to
+        # communicate properly.  We shall try to downgrade to v2
+        # if we support v3 (v2 support is so old that we don't
+        # try to downgrade to v1 support).  In theory, the APIVersion:
+        # command (with the BE supported version) should have also
+        # been issued in v1 format, but that ship (of the external
+        # recorder moving to its highest api version before verification
+        # that the BE supports it) has sailed, and a new type of
+        # negotiation would be required.  In summary, we will support
+        # v3, and allow a one time attempt to downgrade to v2.
+        #
+        if (APIVERSION == 3):
             try:
+                jcmd = json.loads(command)
+            except json.JSONDecodeError:
+                # Test for a possible v2 response negotiation and attempt to support it
+                if re.match(r'^\d+:APIVersion:', command):
+                    APIVERSION = 2
+                    serial, cmd, value = command.split(':', 2)
+                else:
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'command received is not in API version 3 format (unable to decode json): {0}'.format(command))
+                    CommandResponse(APIVERSION, 0, command, 'ERR', 'Unable to decode json request: {0}'.format(command))
+                    continue
+            else:
+                serial = jcmd.get('serial', 0)
+                cmd = jcmd.get('command', '')
+                value = jcmd.get('value', None)
+                # This is a workaround for a questionable implementaion decision
+                if (cmd == 'TuneChannel') and (value is None):
+                    value = jcmd.get('channum', None)
+        elif (APIVERSION == 2):
+            if ':' in command:
                 serial, cmd = command.split(':', 1)
-            except ValueError:
-                cmd = ''
-            if (serial is None) or (cmd is None):
+            else:
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'command received is not in API version 2 format: {0}'.format(command))
-                if serial is None:
-                    serial = '0'
-                CommandResponse(serial, 'ERR:API Version 2 requires serial number')
+                CommandResponse(APIVERSION, serial, command, 'ERR', 'API Version 2 requires serial number and command: {0}'.format(command))
                 continue
-        else:
-            serial = None
+            if ':' in cmd: 
+                cmd, value = cmd.split(':', 1)
+        elif (APIVERSION == 1):
             cmd = command
+            if ':' in cmd:
+                cmd, value = cmd.split(':', 1)
+        else:
+            CommandResponse(1, 0, cmd, 'ERR', 'Unsupport API version (internal error)')
+            continue
 
         if (cmd == 'APIVersion?'):
+            CommandResponse(APIVERSION, serial, cmd, 'OK', MAXAPIVERSION)
             APIVERSION = MAXAPIVERSION
-            CommandResponse(serial, 'OK:' + str(APIVERSION))
-        elif (cmd.startswith('APIVersion:')):
-            value = None
+        elif (cmd == 'APIVersion'):
             try:
-                value = int(cmd[11:])
+                value = int(value)
             except ValueError:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion is not an integer')
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion ({0}) is not an integer'.format(value))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', 'APIVersion ({0}) is not an integer'.format(value))
             else:
                 if (value > MAXAPIVERSION):
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion specified (' + str(value) + ') is higher than supported (' + str(MAXAPIVERSION) + ')')
-                    CommandResponse(serial, 'ERR:APIVersion specified (' + str(value) + ') is higher than supported (' + str(MAXAPIVERSION) + ')')
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion specified ({0}) is higher than supported ({1})'.format(value, MAXAPIVERSION))
+                    CommandResponse(APIVERSION, serial, cmd, 'ERR', 'APIVersion specified ({0}) is higher than supported ({1})'.format(value, MAXAPIVERSION))
                 elif (value < 1):
-                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion specified (' + str(value) + ') is lower than one')
-                    CommandResponse(serial, 'ERR:APIVersion specified (' + str(value) + ') is lower than one')
+                    log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'APIVersion specified ({0}) is lower than one'.format(value))
+                    CommandResponse(APIVERSION, serial, cmd, 'ERR', 'APIVersion specified ({0}) is lower than one'.format(value))
                 else:
                     APIVERSION = value
-                    CommandResponse(serial, 'OK:' + str(APIVERSION))
+                    CommandResponse(APIVERSION, serial, cmd, 'OK', APIVERSION)
         elif (cmd == 'Version?'):
-            CommandResponse(serial, 'OK:' + str(VERSION))
+            CommandResponse(APIVERSION, serial, cmd, 'OK', VERSION)
         elif (cmd == 'Description?'):
             description = os.path.basename(sys.argv[0])
             description += ' (pid #{})'.format(os.getpid())
@@ -1575,82 +1630,77 @@ if __name__ == '__main__':
                 connectionAddresses = TSReader.getConnectionAddresses()
                 if connectionAddresses is not None:
                     description += ' from {} tuner {}'.format(connectionAddresses[2], connectionAddresses[4])
-            CommandResponse(serial, 'OK:' + description)
+            CommandResponse(APIVERSION, serial, cmd, 'OK', description)
         elif (cmd == 'HasPictureAttributes?'):
             if TSReader.hasPictureAttributes():
-                CommandResponse(serial, 'OK:Yes')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'Yes')
             else:
-                CommandResponse(serial, 'OK:No')
-        elif (cmd.startswith('SetBrightness:')):
-            value = cmd[14:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'No')
+        elif (cmd == 'SetBrightness'):
             try:
                 TSReader.setBrightness(value)
             except (ValueError, TypeError) as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetBrightness request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetBrightness request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
-        elif (cmd.startswith('SetContrast:')):
-            value = cmd[12:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
+        elif (cmd == 'SetContrast'):
             try:
                 TSReader.setContrast(value)
             except (ValueError, TypeError) as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetContrast request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetContrast request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
-        elif (cmd.startswith('SetColour:')):
-            value = cmd[10:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
+        elif (cmd == 'SetColour'):
             try:
                 TSReader.setColour(value)
             except (ValueError, TypeError) as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetColour request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetColour request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
-        elif (cmd.startswith('SetHue:')):
-            value = cmd[7:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
+        elif (cmd == 'SetHue'):
             try:
                 TSReader.setHue(value)
             except (ValueError, TypeError) as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetHue request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SetHue request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
         elif (cmd == 'FlowControl?'):
-            CommandResponse(serial, 'OK:{0}'.format(TSWriter.flowControl()))
+            CommandResponse(APIVERSION, serial, cmd, 'OK', '{0}'.format(TSWriter.flowControl()))
         elif (cmd == 'HasTuner?'):
             if TSReader.hasTuner():
-                CommandResponse(serial, 'OK:Yes')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'Yes')
             else:
-                CommandResponse(serial, 'OK:No')
-        elif (cmd.startswith('TuneChannel:')):
-            channel = cmd[12:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'No')
+        elif (cmd == 'TuneChannel'):
             start = time.time()                # If needed, wait for for discovery to complete
             while(((time.time() - start) < 10) and (HDHRBackgroundDiscoveryThread.is_alive())):
                 log(MythLog.RECORD, MythLog.DEBUG, 'Waiting for HDHR discovery to complete before processing TuneChannel')
                 time.sleep(.1)
             try:
-                TSReader.tuneChannel(channel)
+                TSReader.tuneChannel(value)
             except (ValueError, TypeError) as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning request for channel {0} accepted'.format(channel))
-                CommandResponse(serial, 'OK:InProgress')
-        elif (cmd.startswith('TuneStatus?')):
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning request for channel {0} accepted'.format(value))
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'InProgress')
+        elif (cmd == 'TuneStatus?'):
             if TSReader.isTuning():
                 log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning in progress')
-                CommandResponse(serial, 'OK:InProgress')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'InProgress')
             else:
                 if TSReader.hasLock():
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning completed')
-                    CommandResponse(serial, 'OK:Tuning completed')
+                    CommandResponse(APIVERSION, serial, cmd, 'OK', 'Tuning completed')
                 else:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
-                    CommandResponse(serial, 'ERR:Tuning failed')
+                    CommandResponse(APIVERSION, serial, cmd, 'ERR', 'Tuning failed')
         elif (cmd == 'LockTimeout?'):
-            CommandResponse(serial, 'OK:{0}'.format(TSReader.getLockTimeout()))
+            CommandResponse(APIVERSION, serial, cmd, 'OK', str(TSReader.getLockTimeout()))
         elif (cmd == 'SignalStrengthPercent?'):
             if TSReader.hasLock():
                 tunerStatus = TSReader.getConnectionTunerStatus()
@@ -1658,13 +1708,13 @@ if __name__ == '__main__':
                     signalStrength = tunerStatus.get('SignalStrengthPercent', 100)
                     if not isinstance(signalStrength, int):
                         signalStrength = 100
-                    CommandResponse(serial, 'OK:{}'.format(signalStrength))
+                    CommandResponse(APIVERSION, serial, cmd, 'OK', str(signalStrength))
                 else:
-                    CommandResponse(serial, 'OK:100')
+                    CommandResponse(APIVERSION, serial, cmd, 'OK', '100')
             else:
-                CommandResponse(serial, 'OK:0')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '0')
         elif (cmd == 'IsOpen?'):
-            CommandResponse(serial, 'OK:Open')
+            CommandResponse(APIVERSION, serial, cmd, 'OK', 'Open')
         elif (cmd == 'HasLock?'):
             if TSReader.hasLock():
                 connectionAddresses = TSReader.getConnectionAddresses()
@@ -1676,61 +1726,60 @@ if __name__ == '__main__':
                                connectionAddresses[4]))
                 else:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning successful')
-                CommandResponse(serial, 'OK:Yes')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'Yes')
             else:
                 if TSReader.isTuning():
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Tuning in progress')
                 else:
                     log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Tuning failed')
-                CommandResponse(serial, 'OK:No')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', 'No')
         elif (cmd == 'StartStreaming'):
             TSReader.start()
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Streaming started')
-            CommandResponse(serial, 'OK:Started')
+            CommandResponse(APIVERSION, serial, cmd, 'OK', 'Started')
         elif (cmd == 'StopStreaming'):
             TSReader.stop()
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Streaming stopped')
-            CommandResponse(serial, 'OK:Stopped')
+            CommandResponse(APIVERSION, serial, cmd, 'OK', 'Stopped')
         elif (cmd == 'XON'):
             try:
                 TSWriter.resume()
             except TypeError as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XON request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XON request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
         elif (cmd == 'XOFF'):
             try:
                 TSWriter.pause()
             except TypeError as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XOFF request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'XOFF request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
-        elif (cmd.startswith('BlockSize:')):
-            blocksize = cmd[10:]
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
+        elif (cmd == 'BlockSize'):
             try:
-                TSWriter.blockSize(blocksize)
+                TSWriter.blockSize(value)
             except ValueError as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'BlockSize request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
         elif (cmd == 'SendBytes'):
             try:
                 TSWriter.sendBytes()
             except TypeError as e:
-                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SendBytes request failed:' + str(e))
-                CommandResponse(serial, 'ERR:' + str(e))
+                log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'SendBytes request failed: ' + str(e))
+                CommandResponse(APIVERSION, serial, cmd, 'ERR', str(e))
             else:
-                CommandResponse(serial, 'OK')
+                CommandResponse(APIVERSION, serial, cmd, 'OK', '')
         elif (cmd == 'CloseRecorder'):
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.INFO, 'Recorder stopping')
-            CommandResponse(serial, 'OK:Terminating')
+            CommandResponse(APIVERSION, serial, cmd, 'OK', 'Terminating')
             break
         else:
             log(MythLog.GENERAL|MythLog.RECORD, MythLog.ERR, 'Invalid command received from ExternalRecorder: {0}'.format(cmd))
-            CommandResponse(serial, 'ERR:Unknown command {0}'.format(cmd))
+            CommandResponse(APIVERSION, serial, cmd, 'ERR', 'Unknown command {0}'.format(cmd))
 
     TSWriter.close()
     TSReader.close()
